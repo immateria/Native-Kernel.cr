@@ -125,7 +125,7 @@ jobs:
           import json, os, pathlib, shutil
           build = pathlib.Path(os.environ['NK_BUILD'])
           evidence = pathlib.Path(os.environ['NK_EVIDENCE'])
-          evidence.mkdir(mode=0o700)
+          evidence.mkdir(parents=True, mode=0o700)
           context = {name: os.environ.get(name) for name in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}
           (evidence / 'workflow.json').write_text(json.dumps(context, indent=2) + '\n')
           receipt = build / 'build-receipt.json'
