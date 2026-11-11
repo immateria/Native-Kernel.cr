@@ -20,9 +20,9 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 30
     env:
-      NK_BUILD: ${{ runner.temp }}/native-kernel-monterey-build
-      NK_HANDOFF: ${{ runner.temp }}/native-kernel-monterey-foundations
-      NK_EVIDENCE: ${{ runner.temp }}/native-kernel-monterey-evidence
+      NK_BUILD: /tmp/native-kernel-monterey-${{ github.run_id }}-${{ github.run_attempt }}/build
+      NK_HANDOFF: /tmp/native-kernel-monterey-${{ github.run_id }}-${{ github.run_attempt }}/native-kernel-monterey-foundations
+      NK_EVIDENCE: /tmp/native-kernel-monterey-${{ github.run_id }}-${{ github.run_attempt }}/evidence
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -105,7 +105,7 @@ jobs:
               'Spawn runs 28 cases; task-token runs 16. This does not qualify Process-Control.\n')
           PY
           /usr/bin/ditto -c -k --keepParent "$NK_HANDOFF" "$NK_HANDOFF.zip"
-          cd "$RUNNER_TEMP"
+          cd "$(dirname "$NK_HANDOFF")"
           /usr/bin/shasum -a 256 native-kernel-monterey-foundations.zip > native-kernel-monterey-foundations.zip.sha256
       - name: Retain Mini download with executable permissions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
