@@ -15,6 +15,9 @@ admit the releases their application has qualified. These availability floors
 are source-derived and do not certify all permitted operating-system versions.
 The process records follow SDK sys/proc_info.h and XNU sys/proc_info_private.h;
 the event record follows Darwin kevent64 on both supported architectures.
+`Spawn.profile` supplies the restricted private native64 spawn layout for Darwin
+24 and 25. It returns nil for other majors. The [process notes](darwin-process.md)
+record the source pins, fixed-copy rules and consumer qualification boundary.
 
 `Mach.read` validates message ID, declared size, NDR, success code and word count
 before reading payload. It rejects complex replies. An interrupted send retries
@@ -32,11 +35,11 @@ how to terminate an invalid trampoline. Resource limits use UInt64 native fields
 The unmanaged probe covers raw pipe dual returns, BSD errno, seventh/eighth
 arguments, raw fork discriminator and typed fork normalization with child-owned
 exit and parent collection, task acquisition/token exchange and cleanup, and
-stateless descriptor, event, resource, signal and process queries. Remaining
-session/sigreturn bodies are instantiated and reachable in LLVM behind an
-unselected fixture branch; that proves their generated dependency closure, not
-successful sigreturn or session creation. Native specs count Mach names before
-and after repeated successful and invalid-destination reads.
+stateless descriptor, event, resource, signal and process queries. The original
+probe instantiated session/sigreturn bodies behind an unselected fixture branch;
+the later runner fixtures execute session creation and native sigreturn
+separately. Native specs count Mach names before and after repeated successful
+and invalid-destination reads.
 
 Both unoptimized and release reachable LLVM must reject managed runtime symbols,
 mutable globals, unapproved assembly, indirect calls and external functions.
@@ -65,20 +68,45 @@ actual Darwin PID reuse and signal-interruption qualification on both compilers.
 Its helper receipts include the 15 dependency source digests. These are consumer
 qualification results, separate from the standalone probe's scope above.
 
-## Candidate hosted profiles
+## Hosted qualification on 2026-11-11
 
-The [runner suite](../ci/README.md), prepared on 2026-11-10, names macOS 15 and
-26 on native ARM64 and x86-64 with Crystal 1.10.0 and 1.22.2. These profile
-records describe the candidate job matrix. The first hosted run passed all four
-macOS 26 native cells at source `1312007`; exact hosts and evidence are recorded
-in [the dated CI results](ci-results.md). Its macOS 15 setup failures leave the
-forward jobs unqualified. Those jobs must execute macOS-15-built artifacts on
-macOS 26 of the same architecture. Local Rosetta execution cannot establish
-native Intel behavior; source inspection and cross-compilation cannot establish
-either host's runtime behavior.
+The [runner suite](../ci/README.md) passed all eight native cells and four
+macOS-15-to-26 forward replays in run `42979523044` at source `0db4c8b`.
+Each native profile ran Crystal 1.10.0 and 1.22.2: ARM64 on macOS 15.8.2 and
+26.7.2, and Intel x86-64 on macOS 15.7.9 and 26.6.1. All execution was
+untranslated; ARM64 runners used virtual machines. Each native cell passed
+19 Crystal specs, 35 Python contracts and ten behavior cases in both development
+and release modes, with positive coverage mapped to 41 typed operations.
+The [dated CI results](ci-results.md) give exact OS builds, source identity,
+reviewed evidence and the first run's historical failures.
+
+The four forward jobs executed macOS-15-built artifacts on macOS 26 of the
+same architecture, for both compilers, without rebuilding. These results apply
+to the recorded artifacts and hosts, not every release in either OS major.
+Local Rosetta execution cannot establish native Intel behavior; source
+inspection and cross-compilation cannot establish either host's runtime behavior.
 
 The additional fixtures exercise successful descriptor, directory, socket,
 resource, session, exec, signal, audit-token, event and process operations in
 disposable processes. Their receipts report each run's actual coverage and
-failure state. Even a passing primitive suite does not qualify Process-Control's
-private spawn ABI or change that consumer's supported-release admission.
+failure state. Process-Control's authenticated startup and lifecycle were
+checked by its separate eight-cell consumer run at `d4fcf3f`, using dependency
+`0db4c8b`. Each cell passed 122 Crystal examples and 11 Python contracts. See
+[the consumer evidence and limits](ci-results.md#separate-consumer-qualification);
+the primitive suite alone does not establish these consumer results.
+
+## Process additions on 2026-11-11
+
+The typed process surface adds `setpgid`, `getpgid` and `getsid`. The existing
+unmanaged session case now executes owned-child group creation/joining, inherited
+session queries, independent session creation and native leader refusals. The
+process case also spawns an audited exec fixture through `Spawn.create`, captures
+its exact output through a caller-owned pipe and collects exit 37 through its
+exclusive collector. Both optimization modes retain the strict LLVM and empty
+import gates. The coverage manifest names these positive paths explicitly.
+
+These additions are included in the hosted source and separate consumer run
+recorded above. Further source or host changes need their own qualification.
+Source compatibility, an older receipt or a standalone spawn result does not
+establish consumer startup, abort, target status or cleanup behavior on a new
+release.

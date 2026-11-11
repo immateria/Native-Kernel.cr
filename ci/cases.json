@@ -66,7 +66,7 @@
     },
     {
       "id": "process",
-      "minimum_darwin": 22,
+      "minimum_darwin": 24,
       "exit_code": 0,
       "stdout": "NK_OK process\n",
       "stderr": ""

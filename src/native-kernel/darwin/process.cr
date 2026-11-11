@@ -22,8 +22,20 @@ module Native::Kernel::Darwin::Process
     Raw.call(7, pid.to_u64!, status.address, options.to_u64!, 0_u64)
   end
 
+  def self.setpgid(pid : Int32, group : Int32) : Result
+    Raw.call(82, pid.to_u64!, group.to_u64!)
+  end
+
+  def self.getpgid(pid : Int32 = 0) : Result
+    Raw.call(151, pid.to_u64!)
+  end
+
   def self.setsid : Result
     Raw.call(147)
+  end
+
+  def self.getsid(pid : Int32 = 0) : Result
+    Raw.call(310, pid.to_u64!)
   end
 
   def self.execve(path : UInt8*, arguments : UInt8**, environment : UInt8**) : Result

@@ -13,7 +13,7 @@ class ManifestTests(unittest.TestCase):
         case_ids = {case["id"] for case in cases} | {"core"}
         self.assertEqual(len(cases), len(case_ids) - 1)
         found = set()
-        for family in ("Descriptor", "Process", "Resource", "Signal", "Event", "Mach"):
+        for family in ("Descriptor", "Process", "Spawn", "Resource", "Signal", "Event", "Mach"):
             path = ROOT / "src/native-kernel/darwin" / (family.lower() + ".cr")
             methods = re.findall(r"^\s*def self\.([a-z_]+)\b", path.read_text(), re.M)
             found.update(f"{family}.{method}" for method in methods)

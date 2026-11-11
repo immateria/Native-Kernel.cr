@@ -1,10 +1,11 @@
 # macOS runner qualification
 
-Prepared on 2026-11-10. The profiles in [profiles.json](profiles.json) are
-candidates. Preparing the workflow, a skipped job, a cross-compile or a Rosetta
-run does not qualify a native runner. The first hosted run passed all four
-macOS 26 native cells; macOS 15 stopped during dependency verification. See
-[the dated results](../docs/ci-results.md) for exact hosts, source and limits.
+Prepared on 2026-11-10; qualification updated on 2026-11-11. Run `42979523044`
+at source `0db4c8b` passed all eight native cells and four forward replays. See
+[the dated results](../docs/ci-results.md) for exact hosts, compilers, evidence
+and limits. The profiles in [profiles.json](profiles.json) define the matrix;
+qualification comes from each run's complete receipts. Preparing a workflow,
+a skipped job, a cross-compile or a Rosetta run does not qualify a native runner.
 
 The workflow has eight native cells: Crystal 1.10.0 and 1.22.2 on each of
 `macos-15`, `macos-15-intel`, `macos-26` and `macos-26-intel`. Each cell checks
@@ -29,7 +30,7 @@ repository. macOS 14 is not a substitute: its runner image was retired on
 `push`, `pull_request` and manual dispatch are enabled. The owner authorized
 publication to [immateria/Native-Kernel.cr](https://github.com/immateria/Native-Kernel.cr)
 on 2026-11-10. The repository was confirmed public before the initial push.
-The workflow requires no secret or local path configuration. Inspect the first
+The workflow requires no secret or local path configuration. Inspect each
 run's 12 receipts before recording hosted qualification. A manual dispatch
 requires the workflow on the default branch. Preparing or publishing this
 workflow does not establish a hosted runtime result.
@@ -95,6 +96,8 @@ For a custom Rosetta wrapper, also pass `--compiler-binary` with the underlying
 compiler's Mach-O path, such as `INSTALL/embedded/bin/crystal` for the official
 package. The wrapper file alone does not identify the compiler binary.
 
-This suite concerns Native-Kernel primitives. It does not admit macOS 26 in
-Process-Control or qualify that consumer's private spawn ABI, process identity,
-ownership policy or cleanup integrations. See [the support boundaries](../docs/support.md).
+This suite concerns Native-Kernel primitives. Process-Control's launch,
+identity, ownership and cleanup qualification comes from its separate consumer
+run, recorded in [the dated results](../docs/ci-results.md#separate-consumer-qualification).
+Native-Kernel receipts alone do not change a consumer's release admission.
+See [the support boundaries](../docs/support.md).

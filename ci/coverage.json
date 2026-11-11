@@ -44,7 +44,16 @@
     "Process.waitpid": {
       "positive_case": "core"
     },
+    "Process.setpgid": {
+      "positive_case": "session"
+    },
+    "Process.getpgid": {
+      "positive_case": "session"
+    },
     "Process.setsid": {
+      "positive_case": "session"
+    },
+    "Process.getsid": {
       "positive_case": "session"
     },
     "Process.execve": {
@@ -64,6 +73,12 @@
     },
     "Process.release": {
       "positive_case": "core"
+    },
+    "Spawn.profile": {
+      "positive_case": "process"
+    },
+    "Spawn.create": {
+      "positive_case": "process"
     },
     "Resource.get": {
       "positive_case": "resource"

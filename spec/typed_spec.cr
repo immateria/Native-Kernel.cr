@@ -49,5 +49,28 @@ require "./spec_helper"
       limit.soft.should be > 0
       limit.hard.should be >= limit.soft
     end
+
+    it "queries the caller's group and session with default and explicit PIDs" do
+      group = Darwin::Process.getpgid
+      group.error.should eq(0)
+      group.primary.should eq(Process.pgid)
+      explicit_group = Darwin::Process.getpgid(Process.pid.to_i32)
+      explicit_group.error.should eq(0)
+      explicit_group.primary.should eq(group.primary)
+
+      session = Darwin::Process.getsid
+      session.error.should eq(0)
+      session.primary.should be > 0
+      explicit_session = Darwin::Process.getsid(Process.pid.to_i32)
+      explicit_session.error.should eq(0)
+      explicit_session.primary.should eq(session.primary)
+    end
+
+    it "preserves native errors for invalid group and session arguments" do
+      [Darwin::Process.getpgid(-1), Darwin::Process.getsid(-1), Darwin::Process.setpgid(-1, 0)].each do |result|
+        result.primary.should eq(-1)
+        result.error.should eq(3) # ESRCH
+      end
+    end
   end
 {% end %}
