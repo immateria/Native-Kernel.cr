@@ -43,6 +43,9 @@ process context. `read` requests TASK_AUDIT_TOKEN and returns eight UInt32 words
 a returned count and a Mach/MIG status. Each read creates and releases a dedicated
 reply receive right before returning. The caller owns target send references and
 must release them independently. A failed cleanup result requires caller policy.
+The native name-count metric returns `{count, operation_code, cleanup_code}`.
+Check both codes: a failed or partial reply can still require VM cleanup, and
+unsupported cleanup is distinct from a failed measurement.
 The default read route remains modern `mach_msg2`; callers selecting Darwin 21
 must pass `Mach.transport(21).not_nil!` to select the separately audited
 seven-argument `mach_msg_trap` route before sending. See [the supported

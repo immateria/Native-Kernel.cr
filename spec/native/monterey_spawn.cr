@@ -6,6 +6,12 @@ require "../../src/native-kernel/darwin"
 module MontereySpawn
   alias Darwin = Native::Kernel::Darwin
 
+  enum Rejection
+    Expected
+    UnexpectedSuccessCollected
+    Failed
+  end
+
   def self.equal(left : UInt8*, right : UInt8*) : Bool
     offset = 0
     while offset < 64
@@ -133,11 +139,25 @@ module MontereySpawn
     zero(descriptor, profile.descriptor_size)
   end
 
+  # Only a successful create plus a positive PID grants collection ownership.
+  # A rejection regression must clean up that child while remaining a failure.
+  # A PID copied out alongside an error can already have been reaped by XNU;
+  # it is evidence of the activation path, never a control/collection input.
+  def self.check_rejection(result : Darwin::Result, child : Int32, expected_error : Int32,
+                           expected_child : Int32, activation : Bool = false) : Rejection
+    if result.error == 0 && child > 0
+      return collect(child, 0, true, true) ? Rejection::UnexpectedSuccessCollected : Rejection::Failed
+    end
+    return Rejection::Failed unless result.primary == -1 && result.error == expected_error
+    expected_pid = activation ? child > 0 : child == expected_child
+    expected_pid ? Rejection::Expected : Rejection::Failed
+  end
+
   def self.rejected_null_arguments : Int32
     child = 0
     rejected = Darwin::Spawn.create(pointerof(child), Pointer(UInt8).null, Pointer(Void).null,
       Pointer(Pointer(UInt8)).null, Pointer(Pointer(UInt8)).null)
-    rejected.primary == -1 && rejected.error == 14 && child == 0 ? 0 : 3
+    check_rejection(rejected, child, 14, 0) == Rejection::Expected ? 0 : 3
   end
 
   # The descriptor's file_actions_size and the copied action count/size are
@@ -163,13 +183,13 @@ module MontereySpawn
       (descriptor.to_unsafe + profile.descriptor_actions_size_offset).as(UInt64*).value = 1048_u64
       child = -78
       mismatch = Darwin::Spawn.create(pointerof(child), target, descriptor.to_unsafe.as(Void*), arguments.to_unsafe, environment.to_unsafe)
-      return mismatch.primary == -1 && mismatch.error == 22 && child == -78 ? 0 : 22
+      return check_rejection(mismatch, child, 22, -78) == Rejection::Expected ? 0 : 22
     end
 
     (descriptor.to_unsafe + profile.descriptor_actions_size_offset).as(UInt64*).value = 8_u64
     child = -77
     too_small = Darwin::Spawn.create(pointerof(child), target, descriptor.to_unsafe.as(Void*), arguments.to_unsafe, environment.to_unsafe)
-    too_small.primary == -1 && too_small.error == 22 && child == -77 ? 0 : 21
+    check_rejection(too_small, child, 22, -77) == Rejection::Expected ? 0 : 21
   end
 
   # A failed activation can have an internal spawn process which XNU reaps
@@ -202,7 +222,46 @@ module MontereySpawn
 
     child = -79
     rejected = Darwin::Spawn.create(pointerof(child), path, descriptor.to_unsafe.as(Void*), arguments.to_unsafe, environment.to_unsafe)
-    rejected.primary == -1 && rejected.error != 0 ? 0 : 25
+    # /dev/null is not a directory: both paths must reach ENOTDIR, not merely
+    # any failure. The post-fork error path copies a positive PID before its
+    # internal reap; an early copyin/resource rejection cannot satisfy this.
+    check_rejection(rejected, child, 20, -79, true) == Rejection::Expected ? 0 : 25
+  end
+
+  # Controlled regression for a negative case that unexpectedly creates a
+  # child. The ordinary exec target exits immediately with argc == 1; even if
+  # it has already exited, the rejection handler must perform its sole reap.
+  def self.rejection_cleanup(target : UInt8*) : Int32
+    profile = self.profile
+    return 48 unless profile
+    descriptor = uninitialized UInt8[144]
+    arguments = StaticArray(UInt8*, 2).new(Pointer(UInt8).null)
+    environment = StaticArray(UInt8*, 1).new(Pointer(UInt8).null)
+    arguments.to_unsafe[0] = target
+    empty_descriptor(profile, descriptor.to_unsafe)
+
+    # Error results never authorize collection, even with a positive copied
+    # PID. Use this probe's own PID so a broken guard cannot target a stranger.
+    own_pid = Darwin::Process.pid.primary.to_i32!
+    rejected = Darwin::Result.new(-1_i64, 0_i64, 14)
+    return 49 unless check_rejection(rejected, own_pid, 14, 0, true) == Rejection::Expected
+    return 50 unless check_rejection(rejected, own_pid, 20, 0, true) == Rejection::Failed
+
+    child = 0
+    created = Darwin::Spawn.create(pointerof(child), target, descriptor.to_unsafe.as(Void*), arguments.to_unsafe, environment.to_unsafe)
+    return 51 unless created.error == 0 && child > 0
+    disposition = check_rejection(created, child, 20, -79, true)
+    status = 0
+    observed = Darwin::Process.waitpid(child, pointerof(status), 1)
+    if observed.primary == -1 && observed.error == 10 # ECHILD proves the handler collected.
+      return disposition == Rejection::UnexpectedSuccessCollected ? 0 : 52
+    end
+    # Preserve ownership if the controlled check itself detects a regression.
+    # A successful wait already collected; zero/EINTR still permits cleanup.
+    if (observed.error == 0 && observed.primary == 0) || observed.error == 4
+      collect(child, 0, true, true)
+    end
+    53
   end
 
   def self.spawn_success(target : UInt8*) : Int32
@@ -241,7 +300,9 @@ module MontereySpawn
     (action + profile.action_type_offset).as(Int32*).value = 5 # CHDIR /
     (action + profile.chdir_path_offset).value = 47_u8
 
-    (descriptor.to_unsafe + profile.descriptor_attribute_size_offset).as(UInt64*).value = profile.attributes_size.to_u64
+    # profile() already validated the exact positive 152-byte copy boundary;
+    # use its native conversion without introducing an unmanaged overflow path.
+    (descriptor.to_unsafe + profile.descriptor_attribute_size_offset).as(UInt64*).value = profile.attributes_size.to_u64!
     (descriptor.to_unsafe + profile.descriptor_attributes_offset).as(UInt64*).value = attributes.to_unsafe.address
     (descriptor.to_unsafe + profile.descriptor_actions_size_offset).as(UInt64*).value = 3128_u64
     (descriptor.to_unsafe + profile.descriptor_actions_offset).as(UInt64*).value = actions.to_unsafe.address
@@ -308,6 +369,9 @@ module MontereySpawn
     elsif equal(which, "spawn-missing-executable".to_unsafe)
       completed = Darwin::Descriptor.write(1, "NK_OK spawn-missing-executable\n".to_unsafe, 31_u64)
       return completed.error == 0 && completed.primary == 31 ? 0 : 45
+    elsif equal(which, "spawn-rejection-cleanup".to_unsafe)
+      completed = Darwin::Descriptor.write(1, "NK_OK spawn-rejection-cleanup\n".to_unsafe, 30_u64)
+      return completed.error == 0 && completed.primary == 30 ? 0 : 54
     end
     46
   end
@@ -327,6 +391,8 @@ module MontereySpawn
                activation_rejected(target, true)
              elsif equal(which, "spawn-missing-executable".to_unsafe)
                activation_rejected(target, false)
+             elsif equal(which, "spawn-rejection-cleanup".to_unsafe)
+               rejection_cleanup(target)
              else
                47
              end

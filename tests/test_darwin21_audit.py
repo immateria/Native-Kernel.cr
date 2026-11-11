@@ -24,7 +24,7 @@ class Darwin21Audit(unittest.TestCase):
         self.assertIn("27b03b360a988dfd3dfdf34262bb0042026747cc", document)
         self.assertIn("xnu-8020.240.18.709.2", document)
         self.assertIn("not** asserted to be the\nshipping kernel", document)
-        self.assertIn("blocked by the missing x86-64", document)
+        self.assertIn("manifest-bound Mini execution", document)
         self.assertIn("build_monterey_foundations.py", document)
 
     def test_private_profile_and_transport_remain_explicitly_separate(self):
@@ -41,10 +41,12 @@ class Darwin21Audit(unittest.TestCase):
         self.assertIn("port_name_count", mach)
         self.assertEqual(mach.count("      INVALID_TRANSPORT"), 2)
         self.assertIn("TRAP_SEND_RECEIVE_OPTIONS = 0x003_u64", mach)
-        self.assertIn("PORT_NAMES_REPLY_SIZE      =   76_u32", mach)
+        self.assertRegex(mach, r"PORT_NAMES_REPLY_SIZE\s*=\s*76_u32")
         self.assertIn("count = buffer[17]", mach)
         self.assertIn("buffer[18] == count", mach)
-        self.assertIn("deallocate(current_task, types_address, types_bytes)", mach)
+        self.assertIn("finish_port_names_reply", mach)
+        # Actual disposal of both mappings after malformed/partial replies is
+        # exercised by the Darwin VM ownership tests in spec/mach_spec.cr.
 
     def test_interrupt_options_are_recorded_as_library_only(self):
         document = (ROOT / "docs/darwin-monterey-foundations.md").read_text(encoding="utf-8")

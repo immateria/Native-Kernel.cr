@@ -36,6 +36,13 @@ names can prevent cleanup; the shard has no context owner to repair them. Modern
 calls default to mach_msg2; `Mach.transport(21)` selects the audited
 seven-argument mach_msg_trap route and must be passed before the first send.
 
+The compatibility name-count query returns count, operation code and cleanup
+code separately. It snapshots received OOL ownership before validating MIG
+semantics, including partial-body receive errors, and attempts every recognized
+mapping release. Both codes must be zero before using a count. Unexpected
+carried-right or structural variants report cleanup uncertainty; this private
+kernel-RPC cleanup is not a general message destructor.
+
 `Signal.action` accepts the exact native action including trampoline and flags.
 It does not install a target-reset policy or add flags. `Signal.restore` returns
 the native sigreturn result if the kernel rejects restoration; callers decide

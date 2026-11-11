@@ -63,8 +63,8 @@ module MontereyTaskToken
   # right. port_name_count owns/deallocates its two OOL arrays, so equal before
   # and after counts are a direct name-table growth metric rather than a leak.
   def self.exchange_growth(task : UInt32, transport : Darwin::Mach::Transport, self_pid : Int32) : Bool
-    before, before_code = Darwin::Mach.port_name_count(task, transport)
-    return false unless before_code == 0
+    before, before_code, before_cleanup = Darwin::Mach.port_name_count(task, transport)
+    return false unless before_code == 0 && before_cleanup == 0
     repeated = 0
     while repeated < 32
       return false unless token_matches(task, task, transport, self_pid)
@@ -72,8 +72,8 @@ module MontereyTaskToken
       return false unless failed != 0 && count == 0
       repeated &+= 1
     end
-    after, after_code = Darwin::Mach.port_name_count(task, transport)
-    after_code == 0 && after == before
+    after, after_code, after_cleanup = Darwin::Mach.port_name_count(task, transport)
+    after_code == 0 && after_cleanup == 0 && after == before
   end
 
   # Each controlled error still attempts the real writer close and lets the
@@ -107,7 +107,7 @@ module MontereyTaskToken
 
   def self.run(which : UInt8*) : Int32
     transport = Darwin::Mach.transport(Darwin::Process.release)
-    return 2 unless transport == Darwin::Mach::Transport::MachMsgTrap
+    return 2 unless transport && transport == Darwin::Mach::Transport::MachMsgTrap
     task = Darwin::Mach.task
     return 3 if task == 0 || task == UInt32::MAX
 

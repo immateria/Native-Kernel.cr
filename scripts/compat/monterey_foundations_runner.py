@@ -33,6 +33,7 @@ CAMPAIGNS = {
             {"id": "spawn-malformed-action-size", "exit_code": 0, "stdout": "NK_OK spawn-malformed-action-size\n", "stderr": ""},
             {"id": "spawn-invalid-cwd", "exit_code": 0, "stdout": "NK_OK spawn-invalid-cwd\n", "stderr": ""},
             {"id": "spawn-missing-executable", "exit_code": 0, "stdout": "NK_OK spawn-missing-executable\n", "stderr": ""},
+            {"id": "spawn-rejection-cleanup", "exit_code": 0, "stdout": "NK_OK spawn-rejection-cleanup\n", "stderr": ""},
         ],
         "topology": "runner -> spawn probe -> one posix_spawn target when creation succeeds; probe exclusively collects confirmed targets",
     },

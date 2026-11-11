@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -68,9 +69,41 @@ class FoundationsRunnerContracts(unittest.TestCase):
             result = runner.run_bundle(self.bundle, self.output)
         self.assertEqual(result["status"], "passed")
         self.assertTrue(result["target_qualified"])
-        self.assertEqual(len(result["cases"]), 4 * len(runner.CAMPAIGNS["spawn"]["cases"]))
+        self.assertEqual(len(result["cases"]), 28)
+        cleanup_builds = {case["build"] for case in result["cases"] if case["case"] == "spawn-rejection-cleanup"}
+        self.assertEqual(cleanup_builds, set(runner.base.BUILD_ROSTER))
         self.assertEqual(result["topology"], runner.CAMPAIGNS["spawn"]["topology"])
         self.assertTrue(result["source_unchanged"])
+
+    def test_manifest_cannot_omit_rejection_cleanup(self):
+        self.manifest["cases"] = [case for case in self.manifest["cases"] if case["id"] != "spawn-rejection-cleanup"]
+        self.save_manifest()
+        with self.assertRaisesRegex(runner.ProbeError, "case contract"):
+            runner.load_manifest(self.bundle)
+
+    def test_one_failed_rejection_cleanup_case_prevents_qualification(self):
+        def execute(command, cwd):
+            result = self.execute(command, cwd)
+            if command[-1] == "spawn-rejection-cleanup" and command[0].endswith("spawn-floor-release"):
+                result["exit_code"] = 17
+            return result
+
+        with mock.patch.object(runner.base, "identify_host", return_value=self.host), \
+                mock.patch.object(runner.base, "run_bounded", side_effect=execute), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = runner.run_bundle(self.bundle, self.output)
+        self.assertEqual(len(result["cases"]), 28)
+        failures = [case for case in result["cases"] if case["status"] != "passed"]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual((failures[0]["build"], failures[0]["case"], failures[0]["status"]),
+                         ("floor-release", "spawn-rejection-cleanup", "wrong_result"))
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["target_runtime_observed"])
+        self.assertFalse(result["target_qualified"])
+        self.assertTrue(result["source_unchanged"])
+        saved = json.loads((self.output / "receipt.json").read_text())
+        self.assertEqual(saved["status"], "failed")
+        self.assertFalse(saved["target_qualified"])
 
     def test_rejects_missing_spawn_target_or_wrong_case(self):
         self.manifest["builds"][0].pop("target_path")
@@ -180,6 +213,36 @@ class FoundationsRunnerContracts(unittest.TestCase):
         self.assertRegex(receipt["invocation"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(receipt["binary"]["sha256"], r"^[0-9a-f]{64}$")
 
+    def test_official_launcher_symlink_keeps_invocation_and_resolves_installed_binary(self):
+        installation = self.base / "installation"
+        launcher = installation / "bin" / "crystal"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n# reviewed fixture launcher\n")
+        launcher.chmod(0o700)
+        binary = installation / "embedded" / "bin" / "crystal"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"\xcf\xfa\xed\xfeactual compiler")
+        binary.chmod(0o700)
+        invocation = self.base / "aliases" / "bin" / "crystal"
+        invocation.parent.mkdir(parents=True)
+        invocation.symlink_to(launcher)
+        identity = "Crystal 1.22.2\nDefault target: x86_64-apple-macosx\n"
+        commands = []
+
+        def command_text(command):
+            commands.append(command)
+            return "x86_64\n" if command[1:3] == ["lipo", "-archs"] else identity
+
+        with mock.patch.object(builder, "OFFICIAL_LAUNCHER_SHA256", builder.digest(launcher)), \
+                mock.patch.object(builder, "command_text", side_effect=command_text):
+            receipt = builder.compiler_receipt(invocation, "1.22.2")
+        self.assertEqual(commands, [[str(invocation), "--version"], [str(binary), "--version"],
+                                    ["/usr/bin/xcrun", "lipo", "-archs", str(binary)]])
+        self.assertEqual(receipt["invocation"]["path"], str(invocation))
+        self.assertEqual(receipt["invocation"]["sha256"], builder.digest(launcher))
+        self.assertEqual(receipt["binary"]["path"], str(binary))
+        self.assertEqual(receipt["binary"]["resolution"], "official-launcher-layout")
+
     def test_campaign_selection_keeps_task_token_independent_of_spawn(self):
         calls = []
 
@@ -259,6 +322,122 @@ class FoundationsRunnerContracts(unittest.TestCase):
         for name in ("monterey_foundations_runner.py", "build_monterey_foundations.py"):
             source = (COMPAT / name).read_text()
             ast.parse(source, feature_version=(3, 8))
+
+
+class MachOLoaderContracts(unittest.TestCase):
+    def artifact(self, legacy=False, duplicate=False, segments=False):
+        if legacy:
+            deployment = struct.pack("<4I", 0x24, 16, 12 << 16, 13 << 16)
+        else:
+            deployment = struct.pack("<6I", 0x32, 24, 1, 12 << 16, 13 << 16, 0)
+        deployments = deployment * (2 if duplicate else 1)
+        starts = struct.pack("<2I", 1, 8) if segments else struct.pack("<I", 0)
+        record = struct.pack("<IHHQIHH", 24, 4096, 6, 4096, 0, 1, 0xffff) if segments else b""
+        payload_size = 28 + len(starts) + len(record)
+        payload = struct.pack("<7I", 0, 28, payload_size, payload_size, 0, 1, 0) + starts + record
+        fixups_command = 32 + len(deployments)
+        fixups_data = fixups_command + 16
+        header = struct.pack("<8I", 0xfeedfacf, 0x01000007, 3, 2, 3 if duplicate else 2,
+                             len(deployments) + 16, 0, 0)
+        command = struct.pack("<4I", 0x80000034, 16, fixups_data, len(payload))
+        return bytearray(header + deployments + command + payload), fixups_command, fixups_data
+
+    def test_reads_both_macos_deployment_commands_and_rebase_metadata(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                data, _, _ = self.artifact(legacy=legacy, segments=True)
+                result = builder.macho_identity(data)
+                self.assertEqual(result["architecture"], "x86_64")
+                self.assertEqual(result["deployment"], {
+                    "command": "LC_VERSION_MIN_MACOSX" if legacy else "LC_BUILD_VERSION",
+                    "platform": "macOS", "minimum": "12.0.0", "sdk": "13.0.0",
+                })
+                self.assertEqual(result["chained_fixups"]["version"], 0)
+                self.assertEqual(result["chained_fixups"]["imports_count"], 0)
+                self.assertEqual(result["chained_fixups"]["segments"],
+                                 [{"index": 0, "pointer_format": 6, "page_count": 1}])
+
+    def test_rejects_foreign_architecture_file_type_and_incomplete_commands(self):
+        for offset, value in ((0, 0xcafebabe), (4, 0x0100000c), (12, 6), (16, 3), (20, 0xffffffff)):
+            with self.subTest(offset=offset):
+                data, _, _ = self.artifact()
+                struct.pack_into("<I", data, offset, value)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
+        data, _, _ = self.artifact()
+        with self.assertRaises(builder.BuildError):
+            builder.macho_identity(data[:31])
+
+    def test_rejects_wrong_platform_deployment_and_duplicate_deployment(self):
+        for offset, value in ((40, 2), (44, 13 << 16), (36, 8)):
+            with self.subTest(offset=offset):
+                data, _, _ = self.artifact()
+                struct.pack_into("<I", data, offset, value)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
+        data, _, _ = self.artifact(duplicate=True)
+        with self.assertRaisesRegex(builder.BuildError, "Duplicate.*deployment"):
+            builder.macho_identity(data)
+
+    def test_rejects_new_fixup_version_imports_and_out_of_bounds_offsets(self):
+        for field, value in ((0, 1), (16, 1), (4, 31), (8, 33), (12, 33), (28, 4)):
+            with self.subTest(field=field):
+                data, _, fixups_data = self.artifact()
+                struct.pack_into("<I", data, fixups_data + field, value)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
+        data, command, _ = self.artifact()
+        struct.pack_into("<I", data, command + 8, len(data))
+        with self.assertRaisesRegex(builder.BuildError, "artifact bounds"):
+            builder.macho_identity(data)
+
+    def test_rejects_segment_records_and_page_tables_outside_fixups(self):
+        for offset, value in ((32, 4), (36, 0xffffffff)):
+            with self.subTest(offset=offset):
+                data, _, fixups_data = self.artifact(segments=True)
+                struct.pack_into("<I", data, fixups_data + offset, value)
+                with self.assertRaisesRegex(builder.BuildError, "payload bounds"):
+                    builder.macho_identity(data)
+
+    def test_accepts_audited_import_formats_page_sizes_and_intel_pointer_formats(self):
+        for imports_format in (1, 2, 3):
+            for page_size in (4096, 16384):
+                for pointer_format in (2, 6):
+                    with self.subTest(imports_format=imports_format, page_size=page_size, pointer_format=pointer_format):
+                        data, _, fixups_data = self.artifact(segments=True)
+                        struct.pack_into("<I", data, fixups_data + 20, imports_format)
+                        struct.pack_into("<2H", data, fixups_data + 40, page_size, pointer_format)
+                        result = builder.macho_identity(data)
+                        self.assertEqual(result["chained_fixups"]["imports_format"], imports_format)
+                        self.assertEqual(result["chained_fixups"]["segments"][0]["pointer_format"], pointer_format)
+
+    def test_rejects_unknown_header_formats_even_without_imports(self):
+        for offset, value in ((20, 0), (20, 4), (24, 1)):
+            with self.subTest(offset=offset, value=value):
+                data, _, fixups_data = self.artifact()
+                struct.pack_into("<I", data, fixups_data + offset, value)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
+
+    def test_rejects_import_symbol_order_and_starts_overlapping_imports(self):
+        data, _, fixups_data = self.artifact()
+        struct.pack_into("<I", data, fixups_data + 12, 28)
+        with self.assertRaises(builder.BuildError):
+            builder.macho_identity(data)
+        for imports_offset in (32, 59):
+            with self.subTest(imports_offset=imports_offset):
+                data, _, fixups_data = self.artifact(segments=True)
+                struct.pack_into("<I", data, fixups_data + 8, imports_offset)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
+
+    def test_rejects_unaudited_page_sizes_and_pointer_formats(self):
+        for offset, value in ((40, 0), (40, 8192), (42, 1), (42, 7), (42, 13)):
+            with self.subTest(offset=offset, value=value):
+                data, _, fixups_data = self.artifact(segments=True)
+                struct.pack_into("<H", data, fixups_data + offset, value)
+                with self.assertRaises(builder.BuildError):
+                    builder.macho_identity(data)
 
 
 if __name__ == "__main__":

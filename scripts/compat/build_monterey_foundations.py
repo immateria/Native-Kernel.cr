@@ -14,6 +14,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -120,10 +121,11 @@ def resolve_compiler_binary(invocation, explicit=None):
         binary, resolution = Path(explicit).expanduser().resolve(), "explicit-operator-path"
     elif is_mach_o(invocation):
         binary, resolution = invocation.resolve(), "direct-mach-o"
-    elif digest(invocation) == OFFICIAL_LAUNCHER_SHA256 and invocation.name == "crystal" and invocation.parent.name == "bin":
-        binary, resolution = (invocation.parent.parent / "embedded/bin/crystal").resolve(), "official-launcher-layout"
     else:
-        raise BuildError("Cannot resolve actual compiler binary; supply --current-binary or --floor-binary for a trusted local wrapper")
+        launcher = invocation.resolve()
+        if digest(invocation) != OFFICIAL_LAUNCHER_SHA256 or launcher.name != "crystal" or launcher.parent.name != "bin":
+            raise BuildError("Cannot resolve actual compiler binary; supply --current-binary or --floor-binary for a trusted local wrapper")
+        binary, resolution = (launcher.parent.parent / "embedded/bin/crystal").resolve(), "official-launcher-layout"
     if not binary.is_file() or not os.access(str(binary), os.X_OK):
         raise BuildError("Compiler binary is missing or not executable: %s" % binary)
     if not is_mach_o(binary):
@@ -170,6 +172,90 @@ def llvm_target(path):
     return match.group(1)
 
 
+def macho_identity(data):
+    """Inspect the final loader profile; this is not a general Mach-O validator."""
+    if len(data) < 32 or data[:4] != b"\xcf\xfa\xed\xfe":
+        raise BuildError("Executable must be a thin little-endian 64-bit Mach-O")
+    _, cpu, _, file_type, command_count, commands_size, _, _ = struct.unpack_from("<8I", data)
+    if cpu != 0x01000007 or file_type != 2:
+        raise BuildError("Executable must be an x86-64 MH_EXECUTE Mach-O")
+    commands_end = 32 + commands_size
+    if commands_end > len(data) or command_count > commands_size // 8:
+        raise BuildError("Mach-O load-command table exceeds the artifact bounds")
+    deployment = None
+    fixups = None
+    offset = 32
+    for _ in range(command_count):
+        if offset + 8 > commands_end:
+            raise BuildError("Truncated Mach-O load command")
+        command, size = struct.unpack_from("<2I", data, offset)
+        if size < 8 or size % 8 or offset + size > commands_end:
+            raise BuildError("Invalid Mach-O load-command size")
+        if command in (0x32, 0x24):
+            if deployment is not None:
+                raise BuildError("Duplicate Mach-O deployment commands")
+            if command == 0x32:
+                if size < 24:
+                    raise BuildError("Truncated LC_BUILD_VERSION")
+                platform_id, minimum, sdk, tools = struct.unpack_from("<4I", data, offset + 8)
+                if platform_id != 1 or size != 24 + tools * 8:
+                    raise BuildError("Invalid macOS LC_BUILD_VERSION")
+                name = "LC_BUILD_VERSION"
+            else:
+                if size != 16:
+                    raise BuildError("Invalid LC_VERSION_MIN_MACOSX")
+                minimum, sdk = struct.unpack_from("<2I", data, offset + 8)
+                name = "LC_VERSION_MIN_MACOSX"
+            if minimum != 0x000c0000:
+                raise BuildError("Executable minimum macOS version must be 12.0.0")
+            version = lambda value: "%d.%d.%d" % (value >> 16, (value >> 8) & 0xff, value & 0xff)
+            deployment = {"command": name, "platform": "macOS", "minimum": version(minimum), "sdk": version(sdk)}
+        elif command == 0x80000034:
+            if fixups is not None or size != 16:
+                raise BuildError("Invalid or duplicate LC_DYLD_CHAINED_FIXUPS")
+            start, length = struct.unpack_from("<2I", data, offset + 8)
+            if start < commands_end or length < 28 or start + length > len(data):
+                raise BuildError("Chained-fixups payload exceeds the artifact bounds")
+            payload = data[start:start + length]
+            revision, starts, imports, symbols, import_count, import_format, symbol_format = struct.unpack_from("<7I", payload)
+            if revision != 0 or import_count != 0:
+                raise BuildError("Chained fixups require version zero and no imported symbols")
+            # Monterey dyld validates these formats even when imports_count is zero.
+            if import_format not in (1, 2, 3) or symbol_format != 0:
+                raise BuildError("Chained fixups require a known imports format and uncompressed symbols")
+            if starts < 28 or starts % 4 or starts + 4 > imports or not 28 <= imports <= symbols <= length:
+                raise BuildError("Chained-fixups header offsets exceed the payload bounds")
+            segment_count = struct.unpack_from("<I", payload, starts)[0]
+            table_end = starts + 4 + segment_count * 4
+            # The starts region ends at imports_offset, before payload EOF.
+            if table_end > imports:
+                raise BuildError("Chained-fixups segment table exceeds the starts payload bounds before imports")
+            segments = []
+            for index in range(segment_count):
+                relative = struct.unpack_from("<I", payload, starts + 4 + index * 4)[0]
+                if relative == 0:
+                    continue
+                record = starts + relative
+                if record < table_end or record + 22 > imports:
+                    raise BuildError("Chained-fixups segment record exceeds the starts payload bounds before imports")
+                record_size = struct.unpack_from("<I", payload, record)[0]
+                page_size, pointer_format = struct.unpack_from("<2H", payload, record + 4)
+                page_count = struct.unpack_from("<H", payload, record + 20)[0]
+                if record_size < 22 + page_count * 2 or record + record_size > imports:
+                    raise BuildError("Chained-fixups page table exceeds the starts payload bounds before imports")
+                if page_size not in (4096, 16384) or pointer_format not in (2, 6):
+                    raise BuildError("Chained fixups require audited Intel page sizes and pointer formats")
+                segments.append({"index": index, "pointer_format": pointer_format, "page_count": page_count})
+            fixups = {"command": "LC_DYLD_CHAINED_FIXUPS", "data_offset": start, "data_size": length,
+                      "version": revision, "imports_count": import_count, "imports_format": import_format,
+                      "symbols_format": symbol_format, "segment_count": segment_count, "segments": segments}
+        offset += size
+    if offset != commands_end or deployment is None or fixups is None:
+        raise BuildError("Mach-O requires an exact command table, macOS deployment and chained-fixups commands")
+    return {"format": "Mach-O 64-bit little-endian", "architecture": "x86_64", "file_type": "MH_EXECUTE",
+            "deployment": deployment, "chained_fixups": fixups}
+
+
 def source_inventory():
     wanted = sorted((ROOT / "src").rglob("*.cr"))
     wanted += [ROOT / relative for relative in (
@@ -190,12 +276,16 @@ def copy_runner(bundle):
 
 
 def write_bundle_readme(bundle, kind):
+    case_count = len(foundations_runner.CAMPAIGNS[kind]["cases"])
+    build_count = len(COMPILERS) * 2
     text = (
         "Native-Kernel Darwin 21 %s bundle\n\n" % kind +
         "Run only on macOS 12.7.6 build 21H1320, Darwin 21.6.0, native Intel:\n"
         "  /usr/bin/python3 -I monterey_foundations_runner.py --output /external/new-%s-result\n\n" % kind +
         "This bundle is prebuilt. The runner verifies every payload hash before and after\n"
         "each bounded case, captures at most 65536 bytes per stream, and archives receipts.\n"
+        "Required roster: %d cases across %d compiler/optimization builds, %d executions.\n" %
+        (case_count, build_count, case_count * build_count) +
         "It does not qualify Process-Control or any other release/host.\n"
     )
     (bundle / "README.txt").write_text(text, encoding="utf-8")
@@ -232,15 +322,20 @@ def build_one(compiler, version, optimization, source, artifact, work, log):
     run([compiler, "run", "scripts/ci/audit.cr", "--", str(ir_path)], cwd=ROOT, environment=environment, log=log)
     executable = artifact.with_suffix("")
     run(["/usr/bin/cc", "-arch", "x86_64", "-mmacosx-version-min=12.0", str(artifact) + ".o",
-         "-o", str(executable), "-Wl,-dead_strip"], cwd=ROOT, environment=environment, log=log)
+         "-o", str(executable), "-Wl,-dead_strip", "-Wl,-fixup_chains"], cwd=ROOT, environment=environment, log=log)
+    run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(executable)],
+        cwd=ROOT, environment=environment, log=log)
+    run(["/usr/bin/codesign", "--verify", "--strict", str(executable)], cwd=ROOT, environment=environment, log=log)
     architectures = command_text(["/usr/bin/xcrun", "lipo", "-archs", str(executable)]).split()
     if architectures != ["x86_64"]:
         raise BuildError("Linked executable is not a sole x86-64 Mach-O: %s" % executable)
     imports = command_text(["/usr/bin/xcrun", "nm", "-u", str(executable)]).strip()
     if imports:
         raise BuildError("Executable imports external symbols: %s" % executable)
+    loader = macho_identity(executable.read_bytes())
     return executable, {"target": target, "architectures": architectures, "ir_sha256": digest(ir_path),
-                        "object_sha256": digest(object_path), "executable_sha256": digest(executable)}
+                        "object_sha256": digest(object_path), "executable_sha256": digest(executable), "loader": loader,
+                        "signing": {"method": "ad-hoc", "verified": True, "verification": "codesign --verify --strict"}}
 
 
 def build_campaign(kind, compilers, output):

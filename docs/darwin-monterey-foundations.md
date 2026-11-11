@@ -12,8 +12,8 @@ It applies only to native64 x86-64 code targeting macOS 12.7.6 / build 21H1320
 | --- | --- |
 | Starting Native-Kernel HEAD | `7ba36ef6d37f4d973816065994eef6099e336967` |
 | Starting worktree | clean; no unrelated work was present |
-| Audit host | `Linux e2b.local 6.1.158+ #1 SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux` |
-| Available language tools | Python 3.11.2 and GCC 12.2.0 (`cc`); Crystal and Clang were unavailable |
+| Initial Arena audit host | `Linux e2b.local 6.1.158+ #1 SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux` |
+| Initial Arena language tools | Python 3.11.2 and GCC 12.2.0 (`cc`); Crystal and Clang were unavailable |
 | Apple source checkout | external `/tmp/xnu-27b03b360a988dfd3dfdf34262bb0042026747cc`, never added to this repository |
 
 The exact shipping `.240.18.709.2` source was not available during this audit.
@@ -23,7 +23,7 @@ block implementation of the independently audited Darwin 21 profile.
 
 ## Immutable source inventory
 
-All consumed Apple bytes came from the official
+All consumed XNU bytes came from the official
 [`xnu-8020.140.41` immutable revision `27b03b360a988dfd3dfdf34262bb0042026747cc`](https://github.com/apple-oss-distributions/xnu/tree/27b03b360a988dfd3dfdf34262bb0042026747cc).
 The path links are immutable URLs at that revision. Byte counts and SHA-256
 were measured from the external checkout.
@@ -62,6 +62,17 @@ were measured from the external checkout.
 | [`osfmk/mach/mach_types.defs`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/mach_types.defs) | same | 24,258 | `462f9361c39d6dc76a72e5e44cec092c3314f7e4149902502100848fbf5c8b0f` |
 | [`bsd/bsm/audit.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/bsd/bsm/audit.h) | same | 12,119 | `27305a37bf8bf11c382391f776406078deef800e236625ba9ac3187d13933f79` |
 | [`osfmk/mach/kern_return.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/kern_return.h) | same | 10,008 | `4577d58f74dfbb8ef07ce460f82cb7a45999ad2a0479486df8d22658d4847f50` |
+| [`libsyscall/mach/mach_msg.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/libsyscall/mach/mach_msg.c) | same | 24,305 | `9b50e291ef8c57490df393e453a52a390253136f1b0c3eeffd9737e32d4e0095` |
+| [`bsd/vfs/vfs_lookup.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/bsd/vfs/vfs_lookup.c) | same | 59,606 | `8d87a17c29e2339fbc3cf968c21d1bea87286f9fcd2e6b0255e47bb4c04dff95` |
+
+Loader validation separately uses published dyld 941.5
+([`d0ad252a84bbbba1fd5937cd8b9a40d5bf08f719`](https://github.com/apple-oss-distributions/dyld/tree/d0ad252a84bbbba1fd5937cd8b9a40d5bf08f719)).
+`common/MachOAnalyzer.cpp` has 296,375 bytes and SHA-256
+`31270d7b507f93a88a68a0c4bd4d6d7163b21231b95bae50254359ff18de1ef8`. Its chained-fixup checks require supported
+import/symbol formats, ordered/bounded starts and import regions, supported
+page sizes and pointer formats. The builder restricts this Intel profile to
+pointer formats 2 and 6. This reference is not an identity claim for the Mini's
+shipping dyld; native loading still needs its own target receipt.
 
 ## A. Private spawn profile
 
@@ -214,19 +225,33 @@ and exact `40 + count*4` length. It requires a caller buffer with at least 512
 readable bytes and owns no port right. The ordinary read path uses it only after
 exchange and reply-right cleanup.
 
-`Mach.port_name_count` is an unmanaged `mach_port_names` request used only by
-the acceptance workload and the raw probe. `mach_port.defs` fixes subsystem ID
-3200 and two out arrays; `std_types.defs` identifies both as UInt32 arrays.
-`message.h` fixes the 24-byte request header, complex reply body, two 16-byte
-LP64 OOL descriptors, and descriptor type 1. The source-recorded MIG layout is
-header, body, two descriptors, NDR, then the two equal counts: 76 bytes with
-reply ID 3300. The fixture validates that shape, byte counts, and both
-descriptors before using the counts, then attempts both `mach_vm_deallocate`
-trap-12 calls. It thus owns and releases the returned OOL mappings rather than
-using FFI or leaving a name-count measurement allocation behind. This is not a
-substitute for comparison with the target SDK's generated user stub, which has
-not occurred; it remains subject to that comparison and the native
-compile/LLVM/import/link and Monterey execution gates below.
+`Mach.port_name_count` sends the unmanaged `mach_port_names` request used by
+these acceptance workloads. It returns `{count, operation_code, cleanup_code}`;
+a usable measurement requires both codes to be zero. `mach_port.defs` fixes
+subsystem ID 3200 and two UInt32 out arrays. The native64 reply has a 24-byte
+header, body, two 16-byte OOL descriptors, NDR and two counts: 76 bytes with
+reply ID 3300. A generated MIG checker using the pinned definitions and the
+review host's SDK agrees with those sizes/offsets; that mixed input is not a
+complete Darwin 21 SDK closure or Mini execution result.
+
+Ownership extraction precedes reply-ID, NDR and MIG count validation. It uses
+received descriptor addresses and byte sizes, rather than malformed array
+counts, and attempts every recognized mapping release. Success and
+`MACH_RCV_BODY_ERROR` (including its `MACH_MSG_MASK` copyout bits) can transfer
+mapping ownership; send and header failures never inspect the unreceived
+buffer. The operation result remains separate from receive-right, VM or
+structural cleanup diagnostics. A simple error envelope containing
+`KERN_SUCCESS` is rejected. Nonempty data descriptors must match the audited
+virtual-copy/deallocation contract.
+
+This private cleanup is scoped to the kernel `mach_port_names` response, not
+a general `mach_msg_destroy` implementation. Traversal is bounded by the
+512-byte buffer and received message size. Duplicate/overlapping owned byte
+ranges are coalesced without assuming page-aligned addresses. Unexpected
+carried rights, OOL-port arrays, overflow or incomplete structural extraction
+produce cleanup code 4 and cannot qualify a measurement. Known data mappings
+are still released. Callers must not treat unsupported cleanup as reconciled
+ownership or automatically retry disposal through the same numeric addresses.
 
 `spec/mach_spec.cr` creates controlled good, complex, wrong-ID, wrong-NDR,
 oversized-count, and inconsistent-size replies. Its managed Darwin fixture also
@@ -250,11 +275,17 @@ from `proc_getpid` and `proc_pidversion`, while `proc_info.c` fills the same
 `p_idversion` and enforces `PIF_COMPARE_IDVERSION` before copyout. The child
 runs no session/group mutation.
 
-The normal path writes/closes the gate, collects status zero, asks the now-dead
+The seventh spawn case deliberately creates a successful bounded exec target,
+passes that confirmed success through the rejection path, and requires both
+collection and a later `ECHILD`. Unexpected success still fails every actual
+negative case. Bad executable/cwd cases require the audited `ENOTDIR` result
+and post-fork PID copyout, without using an error-result PID for control.
+
+The normal task-token path writes/closes the gate, collects status zero, asks the now-dead
 destination to fail, and releases target/task rights. The separate
-`task-token-gate-write-failure` and `task-token-gate-close-failure` cases inject
-an `EBADF` result by attempting a second close on the real gate-writer
-descriptor after its first close, then uses the same bounded collector. After every confirmed fork, collection is attempted even
+`task-token-gate-write-failure` and `task-token-gate-close-failure` cases
+respectively write to an invalid descriptor or close the actual writer twice
+to obtain `EBADF`, then use the same bounded collector. After every confirmed fork, collection is attempted even
 when gate write/close reports failure; a distinct fixture return records a
 cleanup/release failure rather than silently replacing the original gate
 result. No path retries creation or treats a PID from a failed spawn-style
@@ -262,22 +293,50 @@ operation as collection authority.
 
 ## Handoff and qualification gates
 
-The source and C-model gates have run. Crystal compilation, LLVM audit,
-linking, undefined-import inspection, bundle manifest generation, and native
-execution have not run because this workspace has neither Crystal nor an Apple
-compiler/SDK. The native gates below are **blocked by the missing x86-64
-prebuilt build/bundle prerequisite**, not labelled “Awaiting target”.
+At Arena commit `8922b40`, only the source and C-model gates had run; that
+cloud workspace lacked Crystal and an Apple compiler/SDK. The local corrective
+checks below ran on macOS 15.4.1 / 24E263, Darwin 24.4.0, on an Apple M4 Max.
+They preserve the source/target qualification boundary.
+
+- Native-Kernel passes 38 Crystal specs on Crystal 1.22.2 and 1.10.0, both
+  native ARM64 and translated x86-64. Each local qualification also passes the
+  strict development/release core LLVM/import/runtime gates and all 24 behavior
+  outcomes. The unmanaged core repeats 100 successful and 100 invalid-target
+  exchanges and checks exact Mach-name counts without a managed observer.
+- The final portable suite passes 85 Python contracts. The changes include
+  malformed/partial received-reply disposal using real fixture-owned VM ranges,
+  strict spawn rejection/cleanup, compiler launcher identity and loader checks.
+- All 12 compatibility executable components build: spawn, its exec target and
+  task-token, each for both compilers and optimization modes. Every artifact
+  passes reachable LLVM, empty imports, ad hoc signature verification and the
+  measured macOS 12.0.0 loader profile. These were translated x86-64 compiler
+  component trials on ARM64, not execution of the compatibility cases or a run
+  of the native-Intel-only packaging CLI.
+- Process-Control retains its independently qualified Darwin 24/25 admission.
+  Its companion fix explicitly refuses other majors before consulting layout
+  availability. The new refusal regression also passes with the existing
+  immutable dependency pin; source data availability does not grant launch
+  authority. All four local consumer profiles pass 129 examples and helper
+  artifact checks with the changed dependency bytes.
+
+Receipts, build logs and input hashes are external in the owner's
+`arena-native-fixes-6zx6y1cp` test-cache directory. The full qualification
+snapshots bind the runtime sources, managed specs and core fixture. Later
+compatibility-fixture and Python-loader changes have their own portable and
+compatibility-component evidence. At this local correction checkpoint, hosted
+macOS 15/26 reruns and forward replay had not run for these changes.
 
 | Gate | State | Evidence required |
 | --- | --- | --- |
 | source layout audit | complete, nearby published source only | inventory and source rules above |
-| Linux independent C model | complete | successful GCC syntax-only assertion |
-| Xcode C assertion (spawn lane) | blocked: build prerequisite | selected spawn builder receipt marks `layout_assertion.status=compiled` |
-| four development/release builds | blocked: build prerequisite | two Crystal versions, x86-64 target, deployment target 12.0 |
-| reachable LLVM / empty imports | blocked: build prerequisite | per-artifact builder logs and hashes |
-| manifest-bound Mini execution | blocked: no bundles to transfer | four compiler builds × six spawn or four task-token named outcomes, plus lane-specific receipts |
-| shipping-source match | unresolved | Apple publication of `.240.18.709.2` source or equivalent official source evidence |
-| Process-Control integration | not started here | separate consumer release admission, identity, ownership and cleanup qualification |
+| independent C model | complete | GCC and selected Xcode syntax assertions |
+| modern local runtime regression | complete on recorded host | both compilers, ARM64 and translated x86-64, strict artifact checks |
+| compatibility component builds | complete locally | 12 x86-64 deployment-12.0 artifacts, both compilers/modes, loader/signature/import/LLVM proofs |
+| native Intel packaging CLI | unrun | source-bound campaign build receipt and manifests from its admitted host |
+| manifest-bound Mini execution | unrun | four builds × seven spawn or four task-token named outcomes, independently verified receipts |
+| new hosted matrix / forward replay | unrun | changed-source macOS 15/26 native cells and kernel replay receipts |
+| shipping-source match | unresolved | Apple publication of matching shipping source or equivalent official evidence |
+| Process-Control Monterey integration | not started here | separate consumer admission, identity, ownership and lifecycle qualification |
 
 On a native Intel Darwin build host with Xcode selected, both reviewed Crystal
 compilers and this corrective checkout, run exactly:
@@ -311,7 +370,11 @@ binary slices.
 It sets `MACOSX_DEPLOYMENT_TARGET=12.0`; a selected spawn lane runs the Xcode
 C assertion, then every selected fixture/compiler/optimization runs Crystal
 cross compilation, reachable-LLVM audit, direct x86-64 link, executable `lipo -archs`
-verification and `xcrun nm -u`. `--campaign` is repeatable; the two lanes have
+verification and `xcrun nm -u`. The link explicitly enables chained fixups to
+avoid an unused `dyld_stub_binder` import at deployment target 12.0. Each final
+binary is ad hoc signed and strictly verified before hashing. Measured loader
+metadata must show a thin x86-64 executable, macOS minimum 12.0.0, and bounded
+version-zero chained fixups with no imports. `--campaign` is repeatable; the two lanes have
 separate manifests, rosters, artifacts and receipt entries. A failed spawn lane
 does not suppress task-token preparation, but a failed or not-produced lane has
 no qualifying manifest and remains explicit in `build-receipt.json`. No
