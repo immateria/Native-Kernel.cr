@@ -29,6 +29,11 @@ PROFILE_IDENTITIES = {
     "macos-15-arm64": (15, 24, "arm64"), "macos-15-x86_64": (15, 24, "x86_64"),
     "macos-26-arm64": (26, 25, "arm64"), "macos-26-x86_64": (26, 25, "x86_64"),
 }
+# Official macOS 1.10.0/1.22.2 launchers, read on 2026-11-10. Only this exact
+# script is mapped to its package's embedded compiler; arbitrary shell is not parsed.
+OFFICIAL_LAUNCHER_SHA256 = "541fa514cc2207fd3168d44e8a5aa13d65a1e3b2258b1636056631e45b61635d"
+MACH_O_MAGICS = (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+                 b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca")
 
 
 class QualificationError(Exception):
@@ -106,6 +111,60 @@ def sha256_file(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def compiler_version(description):
+    match = re.search(r"\bCrystal (\d+\.\d+\.\d+)(?:\s|$)", description)
+    target = re.search(r"^Default target: (.+)$", description, re.M)
+    if not match or not target:
+        raise QualificationError("Compiler version output lacks version or default target")
+    return match[1], target[1].strip()
+
+
+def resolve_compiler_binary(invocation, explicit=None):
+    invocation = Path(invocation)
+    with invocation.open("rb") as stream:
+        direct = stream.read(4) in MACH_O_MAGICS
+    if explicit:
+        binary, resolution = Path(explicit).expanduser().resolve(), "explicit-operator-path"
+    elif direct:
+        binary, resolution = invocation, "direct-mach-o"
+    elif sha256_file(invocation) == OFFICIAL_LAUNCHER_SHA256 and invocation.name == "crystal" and invocation.parent.name == "bin":
+        binary, resolution = (invocation.parent.parent / "embedded/bin/crystal").resolve(), "official-launcher-layout"
+    else:
+        raise QualificationError("Cannot resolve actual compiler binary; supply --compiler-binary for a trusted local wrapper")
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise QualificationError("Compiler binary is missing or not executable")
+    with binary.open("rb") as stream:
+        if stream.read(4) not in MACH_O_MAGICS:
+            raise QualificationError("Actual compiler binary must be Mach-O, not a launcher")
+    return binary, resolution
+
+
+def validate_compiler_identity(compiler, profile):
+    try:
+        invocation, binary = compiler["invocation"], compiler["binary"]
+        if compiler["identity_scope"] != "compiler-binary-and-invocation-only":
+            raise QualificationError("Origin compiler identity scope is incomplete")
+        for identity in (invocation, binary):
+            if not isinstance(identity["path"], str) or not Path(identity["path"]).is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", identity["sha256"]):
+                raise QualificationError("Origin compiler path/hash identity is incomplete")
+        if binary["resolution"] not in ("direct-mach-o", "official-launcher-layout", "explicit-operator-path"):
+            raise QualificationError("Origin compiler binary resolution is unknown")
+        if binary["resolution"] == "direct-mach-o" and (invocation["path"] != binary["path"] or invocation["sha256"] != binary["sha256"]):
+            raise QualificationError("Origin direct compiler binary differs from invocation")
+        architectures = binary["architectures"]
+        if not isinstance(architectures, list) or not architectures or len(architectures) != len(set(architectures)) or not set(architectures).issubset({"arm64", "x86_64"}) or profile["architecture"] not in architectures:
+            raise QualificationError("Compiler binary lacks profile architecture")
+        version, target = compiler_version(compiler["description"])
+        binary_version, binary_target = compiler_version(binary["description"])
+        if version not in ("1.10.0", "1.22.2") or version != compiler["version"] or binary_version != version or binary["version"] != version:
+            raise QualificationError("Compiler invocation and binary versions differ")
+        architecture = "arm64" if target.startswith(("aarch64-", "arm64-")) else "x86_64" if target.startswith("x86_64-") else None
+        if architecture != profile["architecture"] or not re.search(r"apple-(?:macosx|darwin)", target) or target != compiler["default_target"] or target != binary_target or target != binary["default_target"]:
+            raise QualificationError("Compiler invocation and binary targets differ from profile")
+    except (KeyError, TypeError, AttributeError) as error:
+        raise QualificationError("Origin compiler binary identity is incomplete") from error
 
 
 def write_json(path, value):
@@ -336,11 +395,13 @@ def validate_replay_identity(origin, destination, source):
         raise QualificationError("Replay source/config identity differs from current checkout")
     if origin.get("translation_exception"):
         raise QualificationError("Local translated qualification cannot supply native forward proof")
+    validate_compiler_identity(origin.get("compiler"), original)
 
 
 def required_native_stages():
     stages = {"identity-" + name for name in ("os-version", "os-build", "hardware-arm64", "translation",
                                              "cpu", "sdk-path", "sdk-version", "cc", "cc-version", "linker", "compiler")}
+    stages.update(("identity-compiler-binary", "identity-compiler-binary-architectures"))
     stages.update(("python-tests", "format", "build-spec", "spec", "core-native", "build-auditor"))
     for optimization in ("development", "release"):
         stages.add("execute-probe-" + optimization)
@@ -398,7 +459,7 @@ class Runner:
         self.receipt["host"] = {"system": platform.system(), "architecture": platform.machine(),
                                 "darwin_release": platform.release(), "kernel": platform.version(),
                                 "os_version": platform.mac_ver()[0]}
-        workflow_fields = ("GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+        workflow_fields = ("GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_WORKFLOW_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
                            "GITHUB_WORKFLOW", "GITHUB_JOB", "GITHUB_REF", "RUNNER_OS", "RUNNER_ARCH", "ImageVersion")
         self.receipt["workflow"] = {name: os.environ[name] for name in workflow_fields if name in os.environ}
         if os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID"):
@@ -473,21 +534,7 @@ class Runner:
 
     def qualify(self):
         self.preflight()
-        compiler = str(Path(self.args.compiler).expanduser().resolve()) if "/" in self.args.compiler else shutil.which(self.args.compiler)
-        if not compiler:
-            raise QualificationError("Compiler executable not found")
-        self.environment["CRYSTAL"] = compiler
-        result = self.observe("compiler", [compiler, "--version"])
-        match = re.search(r"\bCrystal (\d+\.\d+\.\d+)(?:\s|$)", result["stdout"])
-        if not match or match[1] not in self.receipt["configuration"]["compilers"]:
-            raise QualificationError("Compiler is outside the exact 1.10.0 / 1.22.2 matrix")
-        self.receipt["compiler"] = {"path": compiler, "version": match[1], "description": result["stdout"],
-                                    "executable_sha256": sha256_file(compiler)}
-        version_target = re.search(r"^Default target: (.+)$", result["stdout"], re.M)
-        if version_target:
-            target = version_target[1].strip()
-            self.receipt["compiler"]["default_target"] = target
-            self.validate_target(target)
+        compiler = self.identify_compiler()
         self.stage("python-tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests"])
         self.stage("format", [compiler, "tool", "format", "--check", "src", "spec", "scripts"])
         # Crystal 1.10's spec command cannot select single-module output.
@@ -538,6 +585,36 @@ class Runner:
                 self.add_artifact(name, artifact, ir_sha256=sha256_file(ir_path), target=match[1],
                                   object_sha256=sha256_file(str(artifact) + ".o"))
         self.execute_artifacts()
+
+    def identify_compiler(self):
+        compiler = str(Path(self.args.compiler).expanduser().resolve()) if "/" in self.args.compiler else shutil.which(self.args.compiler)
+        if not compiler:
+            raise QualificationError("Compiler executable not found")
+        compiler = str(Path(compiler).resolve())
+        self.environment["CRYSTAL"] = compiler
+        result = self.observe("compiler", [compiler, "--version"])
+        version, target = compiler_version(result["stdout"])
+        if version not in self.receipt["configuration"]["compilers"]:
+            raise QualificationError("Compiler is outside the exact 1.10.0 / 1.22.2 matrix")
+        self.validate_target(target)
+        self.receipt["compiler"] = {"version": version, "description": result["stdout"], "default_target": target,
+                                    "invocation": {"path": compiler, "sha256": sha256_file(compiler)},
+                                    "identity_scope": "compiler-binary-and-invocation-only"}
+        binary, resolution = resolve_compiler_binary(compiler, getattr(self.args, "compiler_binary", None))
+        identity = {"path": str(binary), "sha256": sha256_file(binary), "resolution": resolution}
+        self.receipt["compiler"]["binary"] = identity
+        result = self.observe("compiler-binary-architectures", ["xcrun", "lipo", "-archs", str(binary)])
+        identity["architectures"] = result["stdout"].strip().split()
+        if self.profile["architecture"] not in identity["architectures"]:
+            raise QualificationError("Compiler binary lacks profile architecture")
+        command = [str(binary), "--version"]
+        if self.receipt["translation_exception"] and self.profile["architecture"] == "x86_64":
+            command = ["/usr/bin/arch", "-x86_64"] + command
+        result = self.observe("compiler-binary", command)
+        identity["version"], identity["default_target"] = compiler_version(result["stdout"])
+        identity["description"] = result["stdout"]
+        validate_compiler_identity(self.receipt["compiler"], self.profile)
+        return compiler
 
     def validate_target(self, target):
         architecture = "arm64" if target.startswith(("aarch64-", "arm64-")) else "x86_64" if target.startswith("x86_64-") else None
@@ -759,6 +836,7 @@ def parse_args(argv=None):
             sub.add_argument("--allow-translation", action="store_true", help="local diagnostic only; forbidden in CI")
         if mode == "qualify":
             sub.add_argument("--compiler", required=True)
+            sub.add_argument("--compiler-binary", help="actual Mach-O compiler behind a trusted local wrapper; explicit operator assertion")
         elif mode == "replay":
             sub.add_argument("--input", required=True)
         else:

@@ -2,8 +2,9 @@
 
 Prepared on 2026-11-10. The profiles in [profiles.json](profiles.json) are
 candidates. Preparing the workflow, a skipped job, a cross-compile or a Rosetta
-run does not qualify a native runner. Hosted macOS 26 and native Intel results
-have not been collected in this preparation pass.
+run does not qualify a native runner. The first hosted run passed all four
+macOS 26 native cells; macOS 15 stopped during dependency verification. See
+[the dated results](../docs/ci-results.md) for exact hosts, source and limits.
 
 The workflow has eight native cells: Crystal 1.10.0 and 1.22.2 on each of
 `macos-15`, `macos-15-intel`, `macos-26` and `macos-26-intel`. Each cell checks
@@ -46,8 +47,11 @@ with automatic updates disabled. It requires `/opt/homebrew` on ARM64 or
 `/usr/local` on Intel. `PKG_CONFIG_LIBDIR` replaces the image's default search
 paths, selecting OpenSSL 3 explicitly even on an image carrying OpenSSL 4.
 The official `crystal-lang/install-crystal` action selects the exact matrix
-version and native architecture. Setup checks `crystal --version`, its default
-target and the selected OpenSSL major before qualification.
+version and native architecture. It can prepend a different Homebrew OpenSSL
+directory to `PKG_CONFIG_PATH`. The verification step restores the selected
+search path after installation and persists it through `GITHUB_ENV` for the
+qualification step. Setup still requires OpenSSL 3, the exact compiler version
+and the correct default target.
 
 Native jobs have a 30-minute ceiling, forward jobs 15 minutes, and each matrix
 runs at most four cells at a time. Matrix failures do not cancel other cells.
@@ -60,9 +64,17 @@ identity, bounded outputs and completion evidence. Failed setup or a skipped
 driver triggers an explicit incomplete receipt. The upload step runs after
 failure and keeps only `OUTPUT/export`: receipts, bounded logs and audited
 executables and compressed LLVM IR, including IR from failed audits. Object
-files and compiler caches stay in external scratch space. Artifacts use unique profile/compiler names, maximum compression and
-three-day retention. A failed originating job can still upload diagnostics;
-its export cannot qualify forward execution.
+files and compiler caches stay in external scratch space. Artifacts use unique
+profile/compiler names, maximum compression and three-day retention. A failed
+originating job can still upload diagnostics; its export cannot qualify forward
+execution.
+
+Compiler receipts retain the invocation or launcher identity separately from
+the actual Mach-O compiler binary. The driver recognizes the reviewed official
+launcher and its embedded compiler, or a direct Mach-O invocation. An unknown
+wrapper requires `--compiler-binary PATH`; that path is the operator's explicit
+assertion about the wrapper. Version and architecture checks still apply. These
+hashes identify the selected compiler files, not every stdlib, SDK or linker input.
 
 For local qualification, use an existing compiler and a new external output
 directory. This does not run the Homebrew setup script:
@@ -79,6 +91,9 @@ Use the profile matching the actual host. `--allow-translation` is an explicit
 local-only option for a Rosetta x86-64 trial on Apple Silicon; select an x86-64
 compiler invocation for that trial. CI never supplies this flag. Such a receipt
 records translation and cannot substitute for the native Intel matrix cells.
+For a custom Rosetta wrapper, also pass `--compiler-binary` with the underlying
+compiler's Mach-O path, such as `INSTALL/embedded/bin/crystal` for the official
+package. The wrapper file alone does not identify the compiler binary.
 
 This suite concerns Native-Kernel primitives. It does not admit macOS 26 in
 Process-Control or qualify that consumer's private spawn ABI, process identity,

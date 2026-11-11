@@ -90,7 +90,8 @@ class RunnerContractTests(unittest.TestCase):
 
     def test_replay_rejects_wrong_source_arch_or_origin(self):
         receipt = {"status": "passed", "mode": "qualify", "profile": "macos-15-arm64",
-                   "profile_definition": self.profile, "source": {"src/a.cr": "abc"}}
+                   "profile_definition": self.profile, "source": {"src/a.cr": "abc"},
+                   "compiler": self.compiler_identity()}
         destination = dict(self.profile, os_major=26, darwin_major=25)
         runner.validate_replay_identity(receipt, destination, {"src/a.cr": "abc"})
         for source, profile in (({"src/a.cr": "changed"}, destination),
@@ -101,6 +102,128 @@ class RunnerContractTests(unittest.TestCase):
         receipt["profile_definition"] = dict(self.profile, os_major=26)
         with self.assertRaises(runner.QualificationError):
             runner.validate_replay_identity(receipt, destination, {"src/a.cr": "abc"})
+
+    def compiler_identity(self):
+        description = "Crystal 1.22.2 [fixture]\nDefault target: aarch64-apple-macosx11.0\n"
+        return {"version": "1.22.2", "description": description,
+                "default_target": "aarch64-apple-macosx11.0",
+                "invocation": {"path": "/install/bin/crystal", "sha256": "1" * 64},
+                "binary": {"path": "/install/embedded/bin/crystal", "sha256": "2" * 64,
+                           "resolution": "official-launcher-layout", "architectures": ["x86_64", "arm64"],
+                           "version": "1.22.2", "description": description,
+                           "default_target": "aarch64-apple-macosx11.0"},
+                "identity_scope": "compiler-binary-and-invocation-only"}
+
+    def compiler_fixture(self, name, *, wrapper=True, content=b"\xcf\xfa\xed\xfecompiler-one"):
+        install = self.directory / name
+        binary = install / "embedded/bin/crystal"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(content)
+        binary.chmod(0o700)
+        invocation = install / "bin/crystal" if wrapper else binary
+        if wrapper:
+            invocation.parent.mkdir()
+            invocation.write_bytes(b'#!/bin/sh\nexec "$(dirname "$0")/../embedded/bin/crystal" "$@"\n')
+            invocation.chmod(0o700)
+        return invocation.resolve(), binary.resolve()
+
+    def identify_fixture_compiler(self, invocation, binary=None, *, description=None, binary_description=None,
+                                  architectures="x86_64 arm64\n", translated=False):
+        managed = self.make_runner()
+        managed.args.compiler = str(invocation)
+        managed.args.compiler_binary = str(binary) if binary else None
+        managed.profile = dict(self.profile, architecture="x86_64") if translated else self.profile
+        managed.receipt["translation_exception"] = translated
+        managed.receipt["configuration"] = {"compilers": ["1.10.0", "1.22.2"]}
+        description = description or self.compiler_identity()["description"]
+        def observe(name, command, required=True):
+            output = description
+            if name == "compiler-binary-architectures":
+                output = architectures
+            elif name == "compiler-binary":
+                output = binary_description or description
+                if translated and command[:2] != ["/usr/bin/arch", "-x86_64"]:
+                    output = self.compiler_identity()["description"]
+            return {"status": "passed", "exit_code": 0, "stdout": output, "stderr": "", "output_truncated": False}
+        stop = runner.QualificationError("Identity complete")
+        with mock.patch.object(managed, "preflight"), mock.patch.object(managed, "observe", side_effect=observe), \
+                mock.patch.object(managed, "stage", side_effect=stop), \
+                mock.patch.object(runner, "OFFICIAL_LAUNCHER_SHA256", "0d4ea55c7304564eb4c9cb27650eefea6d37a911ce13f4b59d1a130c3a4b0377", create=True):
+            try:
+                managed.qualify()
+            except runner.QualificationError as error:
+                if error is not stop:
+                    raise
+        return managed.receipt.get("compiler", {})
+
+    def test_official_launcher_and_actual_binary_have_separate_hashes(self):
+        invocation, binary = self.compiler_fixture("official")
+        identity = self.identify_fixture_compiler(invocation)
+        self.assertEqual(identity.get("invocation"), {"path": str(invocation),
+                         "sha256": "0d4ea55c7304564eb4c9cb27650eefea6d37a911ce13f4b59d1a130c3a4b0377"})
+        self.assertEqual(identity.get("binary", {}).get("path"), str(binary))
+        self.assertEqual(identity.get("binary", {}).get("sha256"), "b2e9fde807198bcde6df6dbde53f6d4576c198be2a237ae1333ae9b4c2fdc8af")
+        self.assertEqual(identity["binary"]["resolution"], "official-launcher-layout")
+        self.assertEqual(identity["binary"]["architectures"], ["x86_64", "arm64"])
+
+    def test_direct_macho_compiler_is_its_own_binary(self):
+        invocation, _ = self.compiler_fixture("direct", wrapper=False)
+        identity = self.identify_fixture_compiler(invocation)
+        self.assertEqual(identity.get("binary", {}).get("path"), str(invocation))
+        self.assertEqual(identity["binary"]["resolution"], "direct-mach-o")
+        self.assertEqual(identity["invocation"]["sha256"], identity["binary"]["sha256"])
+
+    def test_unknown_wrapper_cannot_masquerade_as_the_compiler_binary(self):
+        invocation, _ = self.compiler_fixture("unknown")
+        invocation.write_text('#!/bin/sh\nexec /unresolved/crystal "$@"\n')
+        with self.assertRaisesRegex(runner.QualificationError, "Cannot resolve actual compiler binary"):
+            self.identify_fixture_compiler(invocation)
+
+    def test_explicit_binary_path_resolves_a_local_wrapper(self):
+        invocation, binary = self.compiler_fixture("explicit")
+        invocation.write_text('#!/bin/sh\nexec /usr/bin/arch -x86_64 /unresolved/crystal "$@"\n')
+        identity = self.identify_fixture_compiler(invocation, binary)
+        self.assertEqual(identity.get("binary", {}).get("path"), str(binary))
+        self.assertEqual(identity["binary"]["resolution"], "explicit-operator-path")
+
+    def test_equal_launchers_do_not_hide_different_compiler_binaries(self):
+        invocation, _ = self.compiler_fixture("first")
+        first = self.identify_fixture_compiler(invocation)
+        # The helper's output/root are per qualification, as in real cells.
+        self.directory = self.directory / "second-cell"
+        self.directory.mkdir()
+        invocation, _ = self.compiler_fixture("second", content=b"\xcf\xfa\xed\xfecompiler-two")
+        second = self.identify_fixture_compiler(invocation)
+        self.assertEqual(first.get("invocation", {}).get("sha256"), second.get("invocation", {}).get("sha256"))
+        self.assertNotEqual(first.get("binary", {}).get("sha256"), second.get("binary", {}).get("sha256"))
+
+    def test_compiler_binary_must_contain_the_qualified_architecture(self):
+        invocation, _ = self.compiler_fixture("wrong-arch")
+        with self.assertRaisesRegex(runner.QualificationError, "Compiler binary lacks profile architecture"):
+            self.identify_fixture_compiler(invocation, architectures="x86_64\n")
+
+    def test_explicit_binary_must_report_the_invocation_version(self):
+        invocation, binary = self.compiler_fixture("wrong-version")
+        with self.assertRaisesRegex(runner.QualificationError, "Compiler invocation and binary versions differ"):
+            self.identify_fixture_compiler(invocation, binary, binary_description="Crystal 1.10.0 [fixture]\nDefault target: aarch64-apple-darwin\n")
+
+    def test_translated_binary_identity_uses_the_qualified_slice(self):
+        invocation, binary = self.compiler_fixture("translated")
+        description = "Crystal 1.22.2 [fixture]\nDefault target: x86_64-apple-macosx10.7\n"
+        identity = self.identify_fixture_compiler(invocation, binary, description=description, translated=True)
+        self.assertEqual(identity["binary"]["default_target"], "x86_64-apple-macosx10.7")
+
+    def test_replay_rejects_launcher_only_or_inconsistent_compiler_identity(self):
+        destination = dict(self.profile, os_major=26, darwin_major=25)
+        receipt = {"status": "passed", "mode": "qualify", "profile_definition": self.profile,
+                   "source": {"a": "b"}, "compiler": self.compiler_identity()}
+        for binary in (None, {}, {**receipt["compiler"]["binary"], "sha256": "launcher"},
+                       {**receipt["compiler"]["binary"], "version": "1.10.0"},
+                       {**receipt["compiler"]["binary"], "architectures": ["x86_64"]}):
+            with self.subTest(binary=binary):
+                changed = dict(receipt, compiler=dict(receipt["compiler"], binary=binary))
+                with self.assertRaises(runner.QualificationError):
+                    runner.validate_replay_identity(changed, destination, {"a": "b"})
 
     def test_bundle_tamper_and_escaping_paths_are_rejected(self):
         executable = self.directory / "fixture"

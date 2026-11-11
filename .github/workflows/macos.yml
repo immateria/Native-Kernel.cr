@@ -60,7 +60,10 @@ jobs:
           shards: false
       - name: Verify compiler and native architecture
         shell: bash
-        run: bash scripts/ci/setup.sh verify '${{ matrix.profile }}' '${{ matrix.compiler }}' 2>&1 | tee -a "$RUNNER_TEMP/nk-setup.log"
+        run: |
+          export PKG_CONFIG_PATH="${PKG_CONFIG_LIBDIR:?missing selected dependency path}"
+          printf 'PKG_CONFIG_PATH=%s\n' "$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          bash scripts/ci/setup.sh verify '${{ matrix.profile }}' '${{ matrix.compiler }}' 2>&1 | tee -a "$RUNNER_TEMP/nk-setup.log"
       - name: Qualify actual host
         timeout-minutes: 20
         shell: bash

@@ -69,11 +69,13 @@ qualification results, separate from the standalone probe's scope above.
 
 The [runner suite](../ci/README.md), prepared on 2026-11-10, names macOS 15 and
 26 on native ARM64 and x86-64 with Crystal 1.10.0 and 1.22.2. These profile
-records are candidates, not hosted qualification results. Its separate forward
-jobs execute macOS-15-built artifacts on macOS 26 of the same architecture.
-Native Intel and hosted macOS 26 remain unrun in this preparation pass. Local
-Rosetta execution cannot establish native Intel behavior; source inspection and
-cross-compilation cannot establish either host's runtime behavior.
+records describe the candidate job matrix. The first hosted run passed all four
+macOS 26 native cells at source `1312007`; exact hosts and evidence are recorded
+in [the dated CI results](ci-results.md). Its macOS 15 setup failures leave the
+forward jobs unqualified. Those jobs must execute macOS-15-built artifacts on
+macOS 26 of the same architecture. Local Rosetta execution cannot establish
+native Intel behavior; source inspection and cross-compilation cannot establish
+either host's runtime behavior.
 
 The additional fixtures exercise successful descriptor, directory, socket,
 resource, session, exec, signal, audit-token, event and process operations in
