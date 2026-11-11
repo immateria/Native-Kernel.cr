@@ -44,13 +44,15 @@ module Probe
   end
 
   def self.mach : Int32
+    transport = Darwin::Mach.transport(Darwin::Process.release)
+    return 9 unless transport
     task = Darwin::Mach.task
     return 9 if task == 0 || task == UInt32::MAX
     name, code = Darwin::Mach.open(task, Darwin::Process.pid.primary.to_i32!)
     return 10 unless code == 0
     retained = Darwin::Mach.retain(task, name)
-    words, count, read = Darwin::Mach.read(task, name)
-    _invalid, _count, invalid = Darwin::Mach.read(task, 0xfffffffe_u32)
+    words, count, read = Darwin::Mach.read(task, name, transport)
+    _invalid, _count, invalid = Darwin::Mach.read(task, 0xfffffffe_u32, transport)
     release = Darwin::Mach.release(task, name)
     release_again = Darwin::Mach.release(task, name)
     task_release = Darwin::Mach.release(task, task)

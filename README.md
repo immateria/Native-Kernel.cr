@@ -43,10 +43,16 @@ process context. `read` requests TASK_AUDIT_TOKEN and returns eight UInt32 words
 a returned count and a Mach/MIG status. Each read creates and releases a dedicated
 reply receive right before returning. The caller owns target send references and
 must release them independently. A failed cleanup result requires caller policy.
-See [the supported profiles](docs/support.md) before using kernel interfaces.
+The default read route remains modern `mach_msg2`; callers selecting Darwin 21
+must pass `Mach.transport(21).not_nil!` to select the separately audited
+seven-argument `mach_msg_trap` route before sending. See [the supported
+profiles](docs/support.md) before using kernel interfaces.
 
 The [Darwin process notes](docs/darwin-process.md) cover numeric group/session
-operations and the restricted private spawn layout for Darwin 24 and 25.
+operations and the restricted private spawn layouts for Darwin 21, 24 and 25.
+The [Darwin 21 foundations audit](docs/darwin-monterey-foundations.md) records
+the non-shipping nearby source pin, exact ABI evidence, build handoff and native
+qualification gates.
 The [collection and inspection notes](docs/darwin-accounting.md) specify wait4,
 waitid, native rusage, typed BSD/task reads, checked PID-information reads,
 filtered lists and explicit PID-usage versions. Terminal accounting and live
