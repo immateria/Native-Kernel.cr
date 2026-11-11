@@ -143,7 +143,7 @@ jobs:
               for source in sorted((build / 'work').glob(pattern)):
                   size = source.stat().st_size
                   used += size
-                  if size > 32 * 1024 * 1024 or used > 64 * 1024 * 1024:
+                  if size > 32 * 1024 * 1024 or used > 128 * 1024 * 1024:
                       raise SystemExit('Raw build evidence exceeds its bound')
                   target = evidence / 'raw' / source.relative_to(build / 'work')
                   target.parent.mkdir(parents=True, exist_ok=True)
