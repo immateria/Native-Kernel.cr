@@ -255,7 +255,7 @@ class RunnerContractTests(unittest.TestCase):
     def test_source_mutation_aborts_a_previously_successful_result(self):
         managed = self.make_runner()
         managed.receipt["stages"] = [{"name": "test", "status": "passed"}]
-        managed.receipt["cases"] = [{"status": "passed"}] * 20
+        managed.receipt["cases"] = [{"status": "passed"}] * (len(runner.CASE_IDS) * 2)
         (managed.root / "src/input.cr").write_text("changed")
         self.assertEqual(managed.finish(), 1)
         receipt = json.loads((managed.output / "export/receipt.json").read_text())

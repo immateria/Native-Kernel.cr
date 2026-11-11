@@ -15,8 +15,10 @@ class ManifestTests(unittest.TestCase):
         found = set()
         for family in ("Descriptor", "Process", "Spawn", "Resource", "Signal", "Event", "Mach"):
             path = ROOT / "src/native-kernel/darwin" / (family.lower() + ".cr")
-            methods = re.findall(r"^\s*def self\.([a-z_]+)\b", path.read_text(), re.M)
-            found.update(f"{family}.{method}" for method in methods)
+            sources = [path] + sorted(path.with_suffix("").rglob("*.cr"))
+            for source in sources:
+                methods = re.findall(r"^\s*def self\.([a-z][a-z0-9_]*)\b", source.read_text(), re.M)
+                found.update(f"{family}.{method}" for method in methods)
         self.assertEqual(found, set(inventory["operations"]))
         for operation, evidence in inventory["operations"].items():
             self.assertIn(evidence["positive_case"], case_ids, operation)

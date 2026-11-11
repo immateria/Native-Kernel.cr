@@ -70,6 +70,20 @@
       "exit_code": 0,
       "stdout": "NK_OK process\n",
       "stderr": ""
+    },
+    {
+      "id": "collection",
+      "minimum_darwin": 24,
+      "exit_code": 0,
+      "stdout": "NK_OK collection\n",
+      "stderr": ""
+    },
+    {
+      "id": "inspection",
+      "minimum_darwin": 24,
+      "exit_code": 0,
+      "stdout": "NK_OK inspection\n",
+      "stderr": ""
     }
   ]
 }

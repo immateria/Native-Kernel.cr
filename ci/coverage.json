@@ -63,10 +63,10 @@
       "positive_case": "core"
     },
     "Process.list": {
-      "positive_case": "process"
+      "positive_case": "inspection"
     },
     "Process.info": {
-      "positive_case": "process"
+      "positive_case": "inspection"
     },
     "Process.signal": {
       "positive_case": "audit"
@@ -124,6 +124,18 @@
     },
     "Mach.read": {
       "positive_case": "core"
+    },
+    "Process.wait4": {
+      "positive_case": "collection"
+    },
+    "Process.waitid": {
+      "positive_case": "collection"
+    },
+    "Resource.getrusage": {
+      "positive_case": "collection"
+    },
+    "Process.usage": {
+      "positive_case": "inspection"
     }
   },
   "raw_transport": [

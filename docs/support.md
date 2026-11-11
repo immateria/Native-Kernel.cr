@@ -15,6 +15,10 @@ admit the releases their application has qualified. These availability floors
 are source-derived and do not certify all permitted operating-system versions.
 The process records follow SDK sys/proc_info.h and XNU sys/proc_info_private.h;
 the event record follows Darwin kevent64 on both supported architectures.
+The [accounting and inspection ABI](darwin-accounting.md) records the three
+official Darwin 24/25 source pins for wait4, waitid, getrusage, BSD/task
+information and PID usage v0/v1/v2. Checked PIDINFO uses slot 545; PID usage is
+PID-keyed and does not inherit that operation's identity comparisons.
 `Spawn.profile` supplies the restricted private native64 spawn layout for Darwin
 24 and 25. It returns nil for other majors. The [process notes](darwin-process.md)
 record the source pins, fixed-copy rules and consumer qualification boundary.
@@ -110,3 +114,27 @@ recorded above. Further source or host changes need their own qualification.
 Source compatibility, an older receipt or a standalone spawn result does not
 establish consumer startup, abort, target status or cleanup behavior on a new
 release.
+
+
+## Accounting and inspection on 2026-11-11
+
+The local collection/inspection batch passes all four profiles on macOS 15.4.1
+(Darwin 24.4.0): ARM64 and translated x86-64, each with Crystal 1.22.2 and
+1.10.0. Each profile passes 24 Crystal specs, 35 Python contracts and twelve
+behavior cases in both development and release modes. Positive coverage maps
+to 45 typed operation names. Both modes also pass the core unmanaged probe,
+reachable LLVM audits and empty undefined-import checks.
+
+The [ABI notes](darwin-accounting.md) record the new wait4, waitid, getrusage,
+typed PIDINFO, PID usage v0/v1/v2 and filtered-list contracts. Review corrected
+the x86-64 flags clobber after optimized execution exposed a stale comparison
+across a trap. The corrected entry and exact audit metadata are included in
+all four final profiles. The auditor's other restrictions remain unchanged.
+
+External receipts are under
+`macos-accounting-20261111/parent-final-nk-{arm64,x86}-{current,floor}` in the
+workspace test cache. Each binds 57 source/build inputs, with source and artifact
+hashes independently recomputed after qualification. Process-Control separately
+qualifies its target collection and version-2 accounting protocol. Earlier
+hosted results do not qualify this batch: new macOS 26, native Intel hardware,
+foreign-credential and protected-target execution remain unrun.

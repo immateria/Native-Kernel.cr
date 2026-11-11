@@ -3,7 +3,9 @@
 Native-Kernel supplies direct Darwin BSD syscall and Mach trap entry for Crystal
 1.10.0 and later on ARM64 and x86-64. It has no runtime shard dependencies.
 The assembly engines were extracted from Process-Control commit `85b0103` on
-2026-11-10. The assembly text, register constraints and clobbers are unchanged.
+2026-11-10. On 2026-11-11, the x86-64 condition-code clobber was corrected to
+LLVM's `flags` register name; the [accounting review](docs/darwin-accounting.md)
+records the optimized native regression that exposed it.
 
 ```crystal
 require "native-kernel/darwin/raw"
@@ -45,6 +47,10 @@ See [the supported profiles](docs/support.md) before using kernel interfaces.
 
 The [Darwin process notes](docs/darwin-process.md) cover numeric group/session
 operations and the restricted private spawn layout for Darwin 24 and 25.
+The [collection and inspection notes](docs/darwin-accounting.md) specify wait4,
+waitid, native rusage, typed BSD/task reads, checked PID-information reads,
+filtered lists and explicit PID-usage versions. Terminal accounting and live
+PID snapshots have separate units, output-validity and attribution contracts.
 
 The raw and typed entries need no managed runtime initialization, allocation,
 exceptions or external function calls. They can be used in an unmanaged custom

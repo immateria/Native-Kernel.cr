@@ -1,4 +1,5 @@
 require "./raw"
+require "./signal/info"
 
 module Native::Kernel::Darwin::Signal
   # XNU __user64_sigaction includes the trampoline before mask and flags.

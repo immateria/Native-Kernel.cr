@@ -101,3 +101,19 @@ identity, ownership and cleanup qualification comes from its separate consumer
 run, recorded in [the dated results](../docs/ci-results.md#separate-consumer-qualification).
 Native-Kernel receipts alone do not change a consumer's release admission.
 See [the support boundaries](../docs/support.md).
+
+The collection/inspection batch adds two source-bound behavior cases, bringing
+the required roster to twelve. `collection` exercises wait4, waitid and
+getrusage with exclusive owned-child collection, observation and copyout-fault
+checks. `inspection` exercises typed BSD/task records, both extended-ID
+comparisons, usage versions 0/1/2 and parent/group list filters. These cases
+require Darwin 24 in this suite. The coverage manifest maps 45 typed operation
+names to positive cases; overloads and record versions are exercised within
+their named case. The [ABI notes](../docs/darwin-accounting.md) describe native
+units, output-validity and attribution limits. The earlier ten-case hosted
+run does not qualify these additions.
+
+The collection fixture also retains a successful write result across a close
+trap before checking it. Its optimized x86-64 build exposed the former `cc`
+clobber's failure to invalidate LLVM's flags register. The entry and exact audit
+profile now name `flags`; the native case remains a regression for that failure.

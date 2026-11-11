@@ -24,7 +24,7 @@ SCHEMA = 1
 OUTPUT_LIMIT = 65536
 CASE_TIMEOUT = 12
 BUILD_TIMEOUT = 300
-CASE_IDS = ("descriptor", "directory", "socket", "resource", "session", "exec", "signal", "audit", "event", "process")
+CASE_IDS = ("descriptor", "directory", "socket", "resource", "session", "exec", "signal", "audit", "event", "process", "collection", "inspection")
 PROFILE_IDENTITIES = {
     "macos-15-arm64": (15, 24, "arm64"), "macos-15-x86_64": (15, 24, "x86_64"),
     "macos-26-arm64": (26, 25, "arm64"), "macos-26-x86_64": (26, 25, "x86_64"),
@@ -198,7 +198,7 @@ def load_config(root):
             raise QualificationError("Compiler matrix must be exactly 1.10.0 and 1.22.2")
         definitions = cases["cases"]
         if [c["id"] for c in definitions] != list(CASE_IDS):
-            raise QualificationError("Case roster must contain all ten required cases in order")
+            raise QualificationError("Case roster must contain all twelve required cases in order")
         for case in definitions:
             if not isinstance(case["minimum_darwin"], int) or not isinstance(case["exit_code"], int):
                 raise QualificationError("Invalid numeric case contract")
@@ -431,7 +431,7 @@ def validate_origin_proof(origin, profile, cases):
             raise QualificationError("Origin stage lacks successful bounded completion")
     for optimization in ("development", "release"):
         observed = [c for c in origin.get("cases", []) if c.get("optimization") == optimization]
-        if len(observed) != 10 or {c.get("case") for c in observed} != set(CASE_IDS):
+        if len(observed) != len(CASE_IDS) or {c.get("case") for c in observed} != set(CASE_IDS):
             raise QualificationError("Origin case roster is incomplete")
         for expected in cases:
             result = next(c for c in observed if c["case"] == expected["id"])
@@ -666,7 +666,7 @@ class Runner:
                         result = classify_case(result, case, darwin)
                         result["optimization"] = optimization
                 self.receipt["cases"].append(result)
-        if len(self.receipt["cases"]) != 20 or not all_passed(self.receipt["cases"]):
+        if len(self.receipt["cases"]) != len(CASE_IDS) * 2 or not all_passed(self.receipt["cases"]):
             raise QualificationError("One or more required behavior cases did not pass")
 
     def replay(self):
@@ -739,7 +739,7 @@ class Runner:
         if error:
             self.receipt["error"] = str(error)
             self.receipt["status"] = "incomplete" if self.args.mode == "record-failure" else "failed"
-        elif self.args.mode in ("qualify", "replay") and all_passed(self.receipt["stages"]) and len(self.receipt["cases"]) == 20 and all_passed(self.receipt["cases"]):
+        elif self.args.mode in ("qualify", "replay") and all_passed(self.receipt["stages"]) and len(self.receipt["cases"]) == len(CASE_IDS) * 2 and all_passed(self.receipt["cases"]):
             self.receipt["status"] = "passed"
         else:
             self.receipt["status"] = "incomplete"

@@ -1,5 +1,7 @@
 require "./raw"
 require "./abi"
+require "./process/wait"
+require "./process/inspection"
 
 module Native::Kernel::Darwin::Process
   def self.pid : Result

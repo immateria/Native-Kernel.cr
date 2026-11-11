@@ -1,4 +1,5 @@
 require "./raw"
+require "./resource/usage"
 
 module Native::Kernel::Darwin::Resource
   struct Limit
@@ -15,5 +16,11 @@ module Native::Kernel::Darwin::Resource
 
   def self.get(resource : Int32, limits : Limit*) : Result
     Raw.call(194, resource.to_u64!, limits.address)
+  end
+
+  # SELF is the current process; CHILDREN accumulates already collected child
+  # accounting. Neither selector is a live arbitrary-PID usage query.
+  def self.getrusage(who : Int32, usage : Usage*) : Result
+    Raw.call(117, who.to_u64!, usage.address)
   end
 end

@@ -14,11 +14,13 @@ module Native::Kernel::Darwin::Raw
     # Preserve the compiler's 128-byte red zone, then reserve the dummy return
     # slot and stack arguments expected by the kernel's eight-argument path.
     # Capture carry before restoring rsp because add changes the flags.
+    # LLVM needs the x86 flags register name; cc does not prevent a comparison
+    # from remaining live across this assembly and its stack adjustment.
     asm("subq $$160, %rsp\nmovq $10, 8(%rsp)\nmovq $11, 16(%rsp)\nsyscall\nsetc ${2:b}\naddq $$160, %rsp"
             : "={rax}"(primary), "={rdx}"(secondary), "=r"(failed)
             : "{rax}"(code), "{rdi}"(a0), "{rsi}"(a1), "{rdx}"(a2), "{r10}"(a3),
               "{r8}"(a4), "{r9}"(a5), "r"(a6), "r"(a7)
-            : "rcx", "r11", "memory", "cc"
+            : "rcx", "r11", "memory", "flags"
             : "volatile")
     error = number >= 0 && failed != 0 ? primary.to_i32! : 0
     Result.new(primary, secondary, error)
