@@ -80,6 +80,18 @@ require "./spec_helper"
       {count, code}.should eq({8_u32, -300})
     end
 
+    it "returns a deterministic native failure for an unchecked transport value" do
+      task = Darwin::Mach.task
+      begin
+        unchecked = 99_i32.unsafe_as(Darwin::Mach::Transport)
+        _words, count, code = Darwin::Mach.read(task, task, unchecked)
+        count.should eq(0_u32)
+        code.should eq(4)
+      ensure
+        Darwin::Mach.release(task, task).should eq(0)
+      end
+    end
+
     it "releases dedicated reply receive rights after success and invalid destinations" do
       transport = Darwin::Mach.transport(Darwin::Process.release).not_nil!
       task = Darwin::Mach.task

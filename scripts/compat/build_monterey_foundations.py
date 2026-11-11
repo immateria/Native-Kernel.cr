@@ -20,8 +20,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import monterey_runner as base
+import monterey_foundations_runner as foundations_runner
 
 COMPILERS = (("current", "1.22.2"), ("floor", "1.10.0"))
+CAMPAIGNS = ("spawn", "task-token")
+# The official macOS launcher is a shell script, not a Mach-O. Only this exact
+# reviewed launcher has a known embedded compiler layout; a local wrapper must
+# name its actual executable with the matching --*-binary option.
+OFFICIAL_LAUNCHER_SHA256 = "541fa514cc2207fd3168d44e8a5aa13d65a1e3b2258b1636056631e45b61635d"
+MACH_O_MAGICS = (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+                 b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca")
 KIND_SOURCES = {
     "spawn": ("spec/native/monterey_spawn.cr", "spec/native/exec.cr"),
     "task-token": ("spec/native/monterey_task_token.cr",),
@@ -74,21 +82,76 @@ def require_build_host():
         raise BuildError("Build requires untranslated native Intel execution")
 
 
+def is_mach_o(path):
+    try:
+        with Path(path).open("rb") as stream:
+            return stream.read(4) in MACH_O_MAGICS
+    except OSError as error:
+        raise BuildError("Cannot inspect compiler path %s: %s" % (path, error))
+
+
+def compiler_version_target(description):
+    version = re.search(r"^Crystal (\d+\.\d+\.\d+)(?:\s|$)", description, re.MULTILINE)
+    target = re.search(r"^Default target: (.+)$", description, re.MULTILINE)
+    if not version or not target:
+        raise BuildError("Compiler version output lacks version or default target")
+    return version.group(1), target.group(1).strip()
+
+
 def compiler_identity(path, expected):
-    output = command_text([path, "--version"])
-    if not re.match(r"^Crystal " + re.escape(expected) + r"(?:\s|$)", output):
+    output = command_text([str(path), "--version"])
+    version, target = compiler_version_target(output)
+    if version != expected:
         raise BuildError("Expected Crystal %s at %s" % (expected, path))
-    if "Default target: x86_64-apple-" not in output:
+    if not target.startswith("x86_64-apple-"):
         raise BuildError("Compiler does not report an x86-64 Apple default target: %s" % path)
     return output.strip()
 
 
-def compiler_receipt(path, expected):
-    architectures = command_text(["/usr/bin/xcrun", "lipo", "-archs", path]).split()
+def invocation_path(value):
+    # Do not resolve symlinks here: the supplied launcher is the command whose
+    # environment and wrapper behavior the build must retain and record.
+    return Path(value).expanduser().absolute()
+
+
+def resolve_compiler_binary(invocation, explicit=None):
+    invocation = invocation_path(invocation)
+    if explicit:
+        binary, resolution = Path(explicit).expanduser().resolve(), "explicit-operator-path"
+    elif is_mach_o(invocation):
+        binary, resolution = invocation.resolve(), "direct-mach-o"
+    elif digest(invocation) == OFFICIAL_LAUNCHER_SHA256 and invocation.name == "crystal" and invocation.parent.name == "bin":
+        binary, resolution = (invocation.parent.parent / "embedded/bin/crystal").resolve(), "official-launcher-layout"
+    else:
+        raise BuildError("Cannot resolve actual compiler binary; supply --current-binary or --floor-binary for a trusted local wrapper")
+    if not binary.is_file() or not os.access(str(binary), os.X_OK):
+        raise BuildError("Compiler binary is missing or not executable: %s" % binary)
+    if not is_mach_o(binary):
+        raise BuildError("Actual compiler binary must be Mach-O, not a launcher: %s" % binary)
+    return binary, resolution
+
+
+def compiler_receipt(invocation, expected, explicit=None):
+    invocation = invocation_path(invocation)
+    invocation_description = compiler_identity(invocation, expected)
+    invocation_version, invocation_target = compiler_version_target(invocation_description)
+    binary, resolution = resolve_compiler_binary(invocation, explicit)
+    binary_description = compiler_identity(binary, expected)
+    binary_version, binary_target = compiler_version_target(binary_description)
+    if (invocation_version, invocation_target) != (binary_version, binary_target):
+        raise BuildError("Compiler invocation and actual binary identities differ: %s" % invocation)
+    architectures = command_text(["/usr/bin/xcrun", "lipo", "-archs", str(binary)]).split()
     if "x86_64" not in architectures:
-        raise BuildError("Crystal compiler binary lacks x86-64 code: %s" % path)
-    return {"path": path, "sha256": digest(Path(path)), "architectures": architectures,
-            "description": compiler_identity(path, expected)}
+        raise BuildError("Crystal compiler binary lacks x86-64 code: %s" % binary)
+    return {
+        "identity_scope": "compiler-binary-and-invocation-only",
+        "invocation": {"path": str(invocation), "sha256": digest(invocation),
+                       "version": invocation_version, "default_target": invocation_target,
+                       "description": invocation_description},
+        "binary": {"path": str(binary), "sha256": digest(binary), "resolution": resolution,
+                   "architectures": architectures, "version": binary_version,
+                   "default_target": binary_target, "description": binary_description},
+    }
 
 
 def toolchain_receipt():
@@ -146,9 +209,7 @@ def make_manifest(bundle, kind, builds):
         "expected_host": base.EXPECTED_HOST,
         "files": files,
         "builds": builds,
-        "cases": [
-            {"id": kind, "exit_code": 0, "stdout": "NK_OK %s\n" % kind, "stderr": ""},
-        ],
+        "cases": foundations_runner.CAMPAIGNS[kind]["cases"],
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return digest(bundle / "manifest.json")
@@ -182,13 +243,16 @@ def build_one(compiler, version, optimization, source, artifact, work, log):
                         "object_sha256": digest(object_path), "executable_sha256": digest(executable)}
 
 
-def build_campaign(kind, compilers, output, receipt):
+def build_campaign(kind, compilers, output):
+    # A campaign writes only its own bundle and manifest. The caller records a
+    # failure instead of letting a spawn error suppress task-token preparation.
     bundle = output / kind
     bundle.mkdir(mode=0o700)
     (bundle / "bin").mkdir(mode=0o700)
     copy_runner(bundle)
     write_bundle_readme(bundle, kind)
     builds = []
+    artifacts = {}
     for label, version in COMPILERS:
         compiler = compilers[label]
         for optimization in ("development", "release"):
@@ -214,23 +278,45 @@ def build_campaign(kind, compilers, output, receipt):
                     for field, value in target_hashes.items():
                         hashes["target_" + field] = value
             builds.append(build)
-            receipt["artifacts"][kind + "/" + name] = hashes
-    receipt["bundles"][kind] = {"manifest_sha256": make_manifest(bundle, kind, builds), "builds": builds}
+            artifacts[name] = hashes
+    return {"status": "built", "manifest_sha256": make_manifest(bundle, kind, builds),
+            "builds": builds, "artifacts": artifacts}
+
+
+def build_campaigns(campaigns, compilers, output):
+    selected = set(campaigns)
+    results = {kind: {"status": "not_requested"} for kind in CAMPAIGNS}
+    for kind in CAMPAIGNS:
+        if kind not in selected:
+            continue
+        try:
+            results[kind] = build_campaign(kind, compilers, output)
+        except (BuildError, OSError, ValueError) as error:
+            # Do not present a partial directory as a qualifying lane: it has
+            # no manifest, and its failure remains explicit in the parent
+            # receipt while later selected campaigns continue.
+            results[kind] = {"status": "failed", "error": str(error)}
+    return results
 
 
 def main(argv=None):
     output = None
     receipt = None
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--current", required=True, help="Crystal 1.22.2 x86-64 compiler path")
-    parser.add_argument("--floor", required=True, help="Crystal 1.10.0 x86-64 compiler path")
-    parser.add_argument("--output", required=True, help="new external parent directory for both bundles and receipts")
+    parser.add_argument("--current", required=True, help="Crystal 1.22.2 invocation path; a reviewed launcher is retained for builds")
+    parser.add_argument("--current-binary", help="actual Mach-O behind an unrecognized current compiler wrapper")
+    parser.add_argument("--floor", required=True, help="Crystal 1.10.0 invocation path; a reviewed launcher is retained for builds")
+    parser.add_argument("--floor-binary", help="actual Mach-O behind an unrecognized floor compiler wrapper")
+    parser.add_argument("--campaign", action="append", choices=CAMPAIGNS,
+                        help="build only this independent campaign; repeat to build both (default: both)")
+    parser.add_argument("--output", required=True, help="new external parent directory for selected bundles and receipts")
     args = parser.parse_args(argv)
     try:
         require_build_host()
         output = base.safe_output(Path(args.output), ROOT)
         output.mkdir(parents=True, exist_ok=False, mode=0o700)
-        compilers = {label: str(Path(getattr(args, label)).resolve()) for label, _ in COMPILERS}
+        compilers = {label: str(invocation_path(getattr(args, label))) for label, _ in COMPILERS}
+        campaigns = tuple(dict.fromkeys(args.campaign or CAMPAIGNS))
         receipt = {
             "schema": 1,
             "status": "incomplete",
@@ -238,35 +324,55 @@ def main(argv=None):
             "host": {"system": platform.system(), "architecture": platform.machine(), "deployment_target": "12.0"},
             "toolchain": {},
             "compilers": {},
+            "selected_campaigns": list(campaigns),
+            "campaigns": {kind: {"status": "not_requested"} for kind in CAMPAIGNS},
             "sources": source_inventory(),
             "source_unchanged": False,
-            "layout_assertion": {},
-            "artifacts": {},
-            "bundles": {},
+            "layout_assertion": {"status": "not_requested"},
         }
         receipt["toolchain"] = toolchain_receipt()
         for label, version in COMPILERS:
-            receipt["compilers"][label] = compiler_receipt(compilers[label], version)
+            receipt["compilers"][label] = compiler_receipt(compilers[label], version, getattr(args, label + "_binary"))
         (output / "logs").mkdir(mode=0o700)
-        layout_log = output / "logs" / "darwin21-spawn-layout.log"
-        with layout_log.open("w", encoding="utf-8") as log:
-            environment = os.environ.copy()
-            run(["/usr/bin/cc", "-arch", "x86_64", "-mmacosx-version-min=12.0", "-std=c11", "-Wall", "-Werror",
-                 "-fsyntax-only", str(ROOT / "scripts/compat/darwin21_spawn_layout.c")], cwd=ROOT, environment=environment, log=log)
-        receipt["layout_assertion"] = {"status": "compiled", "source_sha256": digest(ROOT / "scripts/compat/darwin21_spawn_layout.c"),
-                                       "log": "logs/darwin21-spawn-layout.log"}
-        for kind in ("spawn", "task-token"):
-            build_campaign(kind, compilers, output, receipt)
+        buildable_campaigns = campaigns
+        # This assertion proves the private spawn profile only. Keep it in the
+        # spawn lane so a task-token-only request does not acquire a spawn
+        # prerequisite, and a spawn-layout failure still leaves task-token able
+        # to prepare its own independent bundle.
+        if "spawn" in campaigns:
+            layout_log = output / "logs" / "darwin21-spawn-layout.log"
+            layout = {"source_sha256": digest(ROOT / "scripts/compat/darwin21_spawn_layout.c"),
+                      "log": "logs/darwin21-spawn-layout.log"}
+            try:
+                with layout_log.open("w", encoding="utf-8") as log:
+                    environment = os.environ.copy()
+                    run(["/usr/bin/cc", "-arch", "x86_64", "-mmacosx-version-min=12.0", "-std=c11", "-Wall", "-Werror",
+                         "-fsyntax-only", str(ROOT / "scripts/compat/darwin21_spawn_layout.c")], cwd=ROOT, environment=environment, log=log)
+                layout["status"] = "compiled"
+            except BuildError as error:
+                layout["status"] = "failed"
+                layout["error"] = str(error)
+                receipt["campaigns"]["spawn"] = {"status": "failed", "error": str(error)}
+                buildable_campaigns = tuple(kind for kind in campaigns if kind != "spawn")
+            receipt["layout_assertion"] = layout
+        built_campaigns = build_campaigns(buildable_campaigns, compilers, output)
+        for kind in buildable_campaigns:
+            receipt["campaigns"][kind] = built_campaigns[kind]
         receipt["source_unchanged"] = receipt["sources"] == source_inventory()
         if not receipt["source_unchanged"]:
             raise BuildError("Source changed during bundle build")
-        receipt["status"] = "built"
+        failed = [kind for kind in campaigns if receipt["campaigns"][kind]["status"] != "built"]
+        receipt["status"] = "built" if not failed else "failed"
         receipt["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         (output / "build-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print("Built separate manifest-bound bundles:")
-        print(output / "spawn")
-        print(output / "task-token")
-        return 0
+        for kind in campaigns:
+            campaign = receipt["campaigns"][kind]
+            if campaign["status"] == "built":
+                print("Built manifest-bound %s bundle:" % kind)
+                print(output / kind)
+            else:
+                print("%s campaign failed: %s" % (kind, campaign["error"]), file=sys.stderr)
+        return 0 if not failed else 1
     except (BuildError, OSError, ValueError) as error:
         if output is not None and receipt is not None:
             receipt["status"] = "failed"

@@ -125,6 +125,9 @@
     "Mach.read": {
       "positive_case": "core"
     },
+    "Mach.port_name_count": {
+      "positive_case": "core"
+    },
     "Process.wait4": {
       "positive_case": "collection"
     },

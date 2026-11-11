@@ -38,16 +38,32 @@ class Darwin21Audit(unittest.TestCase):
         self.assertIn("TRAP_RECEIVE_OPTIONS", mach)
         self.assertIn("retry_phase", mach)
         self.assertIn("decode_task_audit_reply", mach)
+        self.assertIn("port_name_count", mach)
+        self.assertEqual(mach.count("      INVALID_TRANSPORT"), 2)
+        self.assertIn("TRAP_SEND_RECEIVE_OPTIONS = 0x003_u64", mach)
+        self.assertIn("PORT_NAMES_REPLY_SIZE      =   76_u32", mach)
+        self.assertIn("count = buffer[17]", mach)
+        self.assertIn("buffer[18] == count", mach)
+        self.assertIn("deallocate(current_task, types_address, types_bytes)", mach)
+
+    def test_interrupt_options_are_recorded_as_library_only(self):
+        document = (ROOT / "docs/darwin-monterey-foundations.md").read_text(encoding="utf-8")
+        self.assertIn("library-only", document)
+        self.assertIn("MACH_MSG_OPTION_USER", document)
+        self.assertNotIn("request observable interruption", document)
 
     def test_native_fixture_completion_markers_match_the_separate_runner(self):
         runner = (ROOT / "scripts/compat/monterey_foundations_runner.py").read_text(encoding="utf-8")
         spawn = (ROOT / "spec/native/monterey_spawn.cr").read_text(encoding="utf-8")
         task_token = (ROOT / "spec/native/monterey_task_token.cr").read_text(encoding="utf-8")
-        self.assertIn('"NK_OK spawn\\n"', runner)
-        self.assertIn('"NK_OK task-token\\n"', runner)
-        self.assertIn('"NK_OK spawn\\n"', spawn)
-        self.assertIn('"NK_OK task-token\\n"', task_token)
-        self.assertIn("collect(pid, 0, false)", task_token)
+        self.assertIn('"NK_OK spawn-success\\n"', runner)
+        self.assertIn('"NK_OK spawn-missing-executable\\n"', runner)
+        self.assertIn('"NK_OK task-token-exchange-growth\\n"', runner)
+        self.assertIn('"NK_OK task-token-gate-close-failure\\n"', runner)
+        self.assertIn('"NK_OK spawn-success\\n"', spawn)
+        self.assertIn('"NK_OK task-token-gate-write-failure\\n"', task_token)
+        self.assertIn("port_name_count", task_token)
+        self.assertIn("compile_transport_dispatch", task_token)
 
 
 if __name__ == "__main__":

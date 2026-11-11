@@ -45,6 +45,8 @@ were measured from the external checkout.
 | [`osfmk/mach/mach_traps.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/mach_traps.h) | same | 25,150 | `d2be0e3e7643e8657b7531b396993076d6503ef30a8d74d84302f24d4ac73bc4` |
 | [`osfmk/mach/message.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/message.h) | same | 46,406 | `5bf2cb4a26867e171d91affca0cde68bbcaf33b491fb1ab3a6b722ece8c0059f` |
 | [`osfmk/mach/port.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/port.h) | same | 22,348 | `04f3aac22d1fb03f489d7a3fd4a2753db874f409d993158a2f2fadb60f165bf7` |
+| [`osfmk/mach/mach_port.defs`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/mach_port.defs) | same | 20,604 | `1c7cf75dc45d467ab26f68e15eab92dd481f798a09dba447686349d04e955ae8` |
+| [`osfmk/mach/std_types.defs`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/std_types.defs) | same | 4,991 | `d02b15a56b3c5adc9fe448f804a783a4cf8149bbf0f90727702f66c99731cb72` |
 | [`osfmk/ipc/mach_msg.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/ipc/mach_msg.c) | same | 19,801 | `395690d8e1cd75a0ddea4cccd1a9c9bb1d05827f9823231b9fad72f1cb134727` |
 | [`osfmk/ipc/ipc_kmsg.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/ipc/ipc_kmsg.c) | same | 163,347 | `7d0bd591f02fdfa8e7b266af97c1121f6a2ba1741645c4485d883bbd69324d07` |
 | [`osfmk/ipc/ipc_mqueue.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/ipc/ipc_mqueue.c) | same | 41,257 | `89726fe30a36cf9e274f78a5472603dc4cd82c3c9b66090f945f77a1b11172a6` |
@@ -52,6 +54,9 @@ were measured from the external checkout.
 | [`osfmk/kern/ipc_kobject.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/kern/ipc_kobject.c) | same | 47,192 | `a50d062ba2bd68ee70c628ad01c399c6b9497cf0d0a3718fb8256efe5212cc09` |
 | [`osfmk/kern/task.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/kern/task.c) | same | 256,534 | `ac10eeb1868ce00433ee0f7ebcec0600b0ee6372ac301a4849665cb67747adc3` |
 | [`osfmk/mach/task_info.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/task_info.h) | same | 24,887 | `54f5264ac024346649c1b2617f83736ee60c7e3e67b96e9bce69e0a601371dfb` |
+| [`bsd/sys/proc_info.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/bsd/sys/proc_info.h) | same | 39,941 | `d87f1a9dee8ad3312706b3e3e58aeb3e113e9a68ce4e45065b9fa0862eaf71dc` |
+| [`bsd/kern/proc_info.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/bsd/kern/proc_info.c) | same | 93,104 | `ea8b44bee0404677b3e64acc81e2975cac5451b9f880f43da41d417a96e00612` |
+| [`bsd/kern/kern_prot.c`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/bsd/kern/kern_prot.c) | same | 48,149 | `021c55783f2360ef859aa022b821562c357e0845b6416de27fe32a2c1a41bce6` |
 | [`osfmk/mach/mig_errors.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/mig_errors.h) | same | 4,614 | `5f9b82c31996cb2929d7bca5acb91ff5ffb1959e74da7e47deef1e25033a89c6` |
 | [`osfmk/mach/ndr.h`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/ndr.h) | same | 6,775 | `2fe22ecac00808ca9c927748c58f51844fdb3b70f4d0f95cebe1e7fe15ff400c` |
 | [`osfmk/mach/mach_types.defs`](https://github.com/apple-oss-distributions/xnu/blob/27b03b360a988dfd3dfdf34262bb0042026747cc/osfmk/mach/mach_types.defs) | same | 24,258 | `462f9361c39d6dc76a72e5e44cec092c3314f7e4149902502100848fbf5c8b0f` |
@@ -104,9 +109,10 @@ source. The audit host actually compiled it successfully on 2026-11-11 with:
 ```
 
 That was GCC 12.2.0 on Linux x86-64, so it demonstrates the self-contained C
-layout model, not Xcode/SDK conformance. The handoff builder repeats the same
-assertion with Xcode's x86-64 C compiler and records `compiled` only in its
-external build receipt. That Apple build has **not** run here.
+layout model, not Xcode/SDK conformance. When the spawn lane is selected, the
+handoff builder repeats the same assertion with Xcode's x86-64 C compiler and
+records `compiled` only in its external build receipt. That Apple build has
+**not** run here.
 
 ### Unmanaged spawn fixture
 
@@ -122,8 +128,19 @@ external build receipt. That Apple build has **not** run here.
 | signal default/mask | parent installs ignored/blocked SIGUSR1; target observes default handler and unblocked bit |
 | close-on-exec | target receives the original writer FD number and requires `F_GETFD` to return EBADF; stdout FD 1 remains through explicit DUP2 |
 | working directory | CHDIR `/`; target opens relative `dev/null` |
-| rejection | null syscall arguments must return `EFAULT` and leave caller's PID output zero |
-| cleanup | output polls total at most five seconds; every confirmed PID has one bounded collector that signals SIGKILL on failure |
+| null setup rejection | null syscall arguments return `EFAULT` and leave caller's PID output zero |
+| malformed descriptor action-size | the descriptor's 8-byte `file_actions_size` is below `PSF_ACTIONS_SIZE(1)`, returns `EINVAL` before fork, and preserves sentinel PID storage |
+| malformed action count/size | a one-action byte length with count two fails the exact `PSF_ACTIONS_SIZE(count)` check before fork and preserves sentinel PID storage |
+| invalid cwd | a CHDIR action through `/dev/null/...` fails activation; the audited kernel error path internally reaps rather than granting caller collection ownership |
+| missing executable | a `/dev/null/...` executable path fails activation; no numeric PID from an error result is used as recovery input |
+| cleanup | output polls total at most five seconds; every **confirmed successful** child PID has one bounded collector that signals SIGKILL on failure; setup/activation rejections never retry creation |
+
+`kern_exec.c` validates the action minimum and exact `PSF_ACTIONS_SIZE(count)`
+before it calls `fork1()`. Later activation/action failure reaches the
+`spawn_no_exec` error path: the kernel copies the PID if requested and performs
+its own internal reap. That is why the fixture treats only `error == 0` plus a
+positive PID as caller collection ownership; it closes only its own descriptors
+on a rejected activation and never retries an ambiguous create.
 
 The fixture never changes a session or process group. It changes the signal
 state only in its runner-owned probe process, which exits after the case. XNU
@@ -155,10 +172,11 @@ release-admission decision.
 | --- | --- |
 | trap | `mach_msg_trap` is Mach trap 31 with seven arguments in `syscall_sw.c` and `mach_traps.h` |
 | seven arguments | message pointer, option, send size, receive size, receive name, timeout, notify |
-| initial trap request | `(-31, buffer, 0x443, 40, 512, reply, 0, 0)` |
-| receive-only retry | `(-31, buffer, 0x402, 0, 512, reply, 0, 0)` |
+| initial raw trap request | `(-31, buffer, 0x003, 40, 512, reply, 0, 0)` (`SEND | RCV`) |
+| receive-only retry | `(-31, buffer, 0x002, 0, 512, reply, 0, 0)` (`RCV`) |
 | option widths | `mach_msg_option_t`, `mach_msg_size_t`, `mach_port_name_t`, and timeout are native 32-bit values; raw slots carry zero-extended values |
-| interruptions | `MACH_SEND_INTERRUPT=0x40` and `MACH_RCV_INTERRUPT=0x400` request observable interruption; send interruption resends only the same route because XNU says caller still has the message; receive interruption has no message and retries receive only |
+| library interruption options | `MACH_SEND_INTERRUPT=0x40` and `MACH_RCV_INTERRUPT=0x400` are **library-only** `MACH_MSG_OPTION_LIB` bits, not raw-trap controls. `mach_msg.c` masks them with `option &= MACH_MSG_OPTION_USER` before the kernel path, so this direct raw caller does not send either bit. |
+| reported interruptions | if a raw exchange reports `MACH_SEND_INTERRUPTED`, no completed send is assumed and only that already-selected route can resend; if it reports `MACH_RCV_INTERRUPTED` after the combined call, the send completed and only receive is retried. A send interruption during receive-only ends the exchange. |
 | request | 40 bytes: 24-byte header, NDR 8, flavor `TASK_AUDIT_TOKEN=15`, count 8; task subsystem starts at 3400 and task_info is ID 3405 |
 | header rights | `0x1513`: target `COPY_SEND` (19), reply `MAKE_SEND_ONCE` (21); target send reference remains caller-owned |
 | reply | task-info reply ID 3505; header + NDR + `kern_return_t` + count + up to eight UInt32 audit words |
@@ -186,28 +204,61 @@ context owner able to repair them.
 
 `Mach.retry_phase` is a pure three-state transition used by the exchange and
 exposed for controlled interruption tests: only `MACH_RCV_INTERRUPTED` after a
-send transitions to receive-only; a send interruption during receive-only ends
-the exchange rather than resending. `Mach.decode_task_audit_reply` is a bounded
-pure decoder exposed specifically for controlled malformed-reply tests. It reads no payload until it has rejected
-complex messages and checked: reply ID 3505, declared size 36...512, NDR bytes,
-zero server code, count <= 8, and exact `40 + count*4` length. It requires a
-caller buffer with at least 512 readable bytes and owns no port right. The
-ordinary read path uses it only after exchange and reply-right cleanup.
+completed send transitions to receive-only; a send interruption during
+receive-only ends the exchange rather than resending. It does not claim that
+`MACH_*_INTERRUPT` controls raw-trap restart behavior. `Mach.decode_task_audit_reply`
+is a bounded pure decoder exposed specifically for controlled malformed-reply
+tests. It reads no payload until it has rejected complex messages and checked:
+reply ID 3505, declared size 36...512, NDR bytes, zero server code, count <= 8,
+and exact `40 + count*4` length. It requires a caller buffer with at least 512
+readable bytes and owns no port right. The ordinary read path uses it only after
+exchange and reply-right cleanup.
+
+`Mach.port_name_count` is an unmanaged `mach_port_names` request used only by
+the acceptance workload and the raw probe. `mach_port.defs` fixes subsystem ID
+3200 and two out arrays; `std_types.defs` identifies both as UInt32 arrays.
+`message.h` fixes the 24-byte request header, complex reply body, two 16-byte
+LP64 OOL descriptors, and descriptor type 1. The source-recorded MIG layout is
+header, body, two descriptors, NDR, then the two equal counts: 76 bytes with
+reply ID 3300. The fixture validates that shape, byte counts, and both
+descriptors before using the counts, then attempts both `mach_vm_deallocate`
+trap-12 calls. It thus owns and releases the returned OOL mappings rather than
+using FFI or leaving a name-count measurement allocation behind. This is not a
+substitute for comparison with the target SDK's generated user stub, which has
+not occurred; it remains subject to that comparison and the native
+compile/LLVM/import/link and Monterey execution gates below.
 
 `spec/mach_spec.cr` creates controlled good, complex, wrong-ID, wrong-NDR,
-oversized-count, and inconsistent-size replies. Its managed Darwin fixture
-also performs 100 successful self reads and 100 invalid-destination reads
+oversized-count, and inconsistent-size replies. Its managed Darwin fixture also
+passes an unchecked enum value via `99_i32.unsafe_as(Transport)` and requires native code 4 without a
+send, then performs 100 successful self reads and 100 invalid-destination reads
 through the selected transport while checking Mach-name count before/after.
-Those fixtures cover parser errors and reply-right growth checks without
-pretending a signal interruption can be reliably induced on every kernel.
+Those fixtures cover parser errors, exhaustive invalid-transport dispatch, and
+reply-right growth checks without pretending a signal interruption can be
+reliably induced on every kernel. The task-token raw fixture additionally has
+an unreachable `argc == 99` compile-instantiation branch which references both
+valid transports; each native bundle compiler must type-check the changed
+private dispatch methods before link/audit.
 
 `spec/native/monterey_task_token.cr` supplies the complementary unmanaged
-workload. It does 32 self successes and 32 invalid-destination failures, then
-forks one gated owned child, obtains its task-name right, verifies 32 reads
-have that child's PID in audit word 5 and a nonzero PID-version in word 7,
-kills/collects it, and requires the dead destination to fail. It releases both
-the target and task rights on its normal path. It creates no new session or
-process group; the parent is the exclusive bounded collector.
+workload. Each named task-token roster case obtains the Mach-name count before
+and after 32 self successes plus 32 invalid-destination failures and requires
+no growth. It then forks one gated owned child, obtains its task-name right, and
+compares every returned audit PID/version pair with the live child's
+`PROC_PIDT_BSDINFOWITHUNIQID` record: `kern_prot.c` sets audit words 5 and 7
+from `proc_getpid` and `proc_pidversion`, while `proc_info.c` fills the same
+`p_idversion` and enforces `PIF_COMPARE_IDVERSION` before copyout. The child
+runs no session/group mutation.
+
+The normal path writes/closes the gate, collects status zero, asks the now-dead
+destination to fail, and releases target/task rights. The separate
+`task-token-gate-write-failure` and `task-token-gate-close-failure` cases inject
+an `EBADF` result by attempting a second close on the real gate-writer
+descriptor after its first close, then uses the same bounded collector. After every confirmed fork, collection is attempted even
+when gate write/close reports failure; a distinct fixture return records a
+cleanup/release failure rather than silently replacing the original gate
+result. No path retries creation or treats a PID from a failed spawn-style
+operation as collection authority.
 
 ## Handoff and qualification gates
 
@@ -221,33 +272,50 @@ prebuilt build/bundle prerequisite**, not labelled “Awaiting target”.
 | --- | --- | --- |
 | source layout audit | complete, nearby published source only | inventory and source rules above |
 | Linux independent C model | complete | successful GCC syntax-only assertion |
-| Xcode C assertion | blocked: build prerequisite | external builder receipt marks `layout_assertion.status=compiled` |
+| Xcode C assertion (spawn lane) | blocked: build prerequisite | selected spawn builder receipt marks `layout_assertion.status=compiled` |
 | four development/release builds | blocked: build prerequisite | two Crystal versions, x86-64 target, deployment target 12.0 |
 | reachable LLVM / empty imports | blocked: build prerequisite | per-artifact builder logs and hashes |
-| manifest-bound Mini execution | blocked: no bundles to transfer | four exact spawn and four exact task-token results plus receipts |
+| manifest-bound Mini execution | blocked: no bundles to transfer | four compiler builds × six spawn or four task-token named outcomes, plus lane-specific receipts |
 | shipping-source match | unresolved | Apple publication of `.240.18.709.2` source or equivalent official source evidence |
 | Process-Control integration | not started here | separate consumer release admission, identity, ownership and cleanup qualification |
 
 On a native Intel Darwin build host with Xcode selected, both reviewed Crystal
-compilers and this checkout at the reviewed commit, run exactly:
+compilers and this corrective checkout, run exactly:
 
 ```sh
 python3 scripts/compat/build_monterey_foundations.py \
   --current /absolute/path/to/crystal-1.22.2/bin/crystal \
   --floor /absolute/path/to/crystal-1.10.0/bin/crystal \
   --output /external/new-monterey-foundations
+
+# Build only the independent task-token lane when spawn tooling is unavailable.
+python3 scripts/compat/build_monterey_foundations.py \
+  --current /absolute/path/to/crystal-1.22.2/bin/crystal \
+  --floor /absolute/path/to/crystal-1.10.0/bin/crystal \
+  --campaign task-token \
+  --output /external/new-monterey-task-token-foundations
 ```
 
-The builder refuses Linux, Rosetta, non-x86-64 compiler targets or compiler
-binary slices, unexpected compiler versions, an existing output directory, and
-output under a source checkout. It sets `MACOSX_DEPLOYMENT_TARGET=12.0`, runs
-the Xcode C assertion,
-then for every fixture/compiler/optimization runs Crystal cross compilation,
-reachable-LLVM audit, direct x86-64 link, `lipo -archs` verification and
-`xcrun nm -u`. The external receipt binds the SDK/CC identity plus the exact
-Crystal binary paths, versions and SHA-256 digests. It writes external logs,
-digests and separate `spawn/` and `task-token/` bundles. No invented binary,
-manifest hash or receipt is stored in Git.
+The builder refuses Linux, Rosetta, non-x86-64 compiler targets or actual
+compiler-binary slices, unexpected compiler versions, an existing output
+directory, and output under a source checkout. It preserves the supplied
+compiler invocation (including an official launcher and its environment) for
+all build commands. It separately resolves the actual executable: direct
+Mach-O is accepted, the one hash-pinned official `bin/crystal` launcher maps to
+`embedded/bin/crystal`, and any other wrapper needs `--current-binary` and/or
+`--floor-binary` naming a trusted actual Mach-O. `lipo` is run only on that
+resolved binary, never on a launcher. The receipt hashes and records both
+invocation and binary paths, versions/default targets, resolution reason, and
+binary slices.
+
+It sets `MACOSX_DEPLOYMENT_TARGET=12.0`; a selected spawn lane runs the Xcode
+C assertion, then every selected fixture/compiler/optimization runs Crystal
+cross compilation, reachable-LLVM audit, direct x86-64 link, executable `lipo -archs`
+verification and `xcrun nm -u`. `--campaign` is repeatable; the two lanes have
+separate manifests, rosters, artifacts and receipt entries. A failed spawn lane
+does not suppress task-token preparation, but a failed or not-produced lane has
+no qualifying manifest and remains explicit in `build-receipt.json`. No
+invented binary, manifest hash or receipt is stored in Git.
 
 Transfer each generated directory unchanged to the Mac Mini. On that exact
 untranslated host, run the following separately (new output paths each time):

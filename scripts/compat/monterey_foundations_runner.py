@@ -26,12 +26,24 @@ MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 RUNNER_FILE = "monterey_foundations_runner.py"
 CAMPAIGNS = {
     "spawn": {
-        "case": {"id": "spawn", "exit_code": 0, "stdout": "NK_OK spawn\n", "stderr": ""},
-        "topology": "runner -> spawn probe -> one posix_spawn target; probe exclusively collects target",
+        "cases": [
+            {"id": "spawn-success", "exit_code": 0, "stdout": "NK_OK spawn-success\n", "stderr": ""},
+            {"id": "spawn-null-arguments", "exit_code": 0, "stdout": "NK_OK spawn-null-arguments\n", "stderr": ""},
+            {"id": "spawn-malformed-descriptor-size", "exit_code": 0, "stdout": "NK_OK spawn-malformed-descriptor-size\n", "stderr": ""},
+            {"id": "spawn-malformed-action-size", "exit_code": 0, "stdout": "NK_OK spawn-malformed-action-size\n", "stderr": ""},
+            {"id": "spawn-invalid-cwd", "exit_code": 0, "stdout": "NK_OK spawn-invalid-cwd\n", "stderr": ""},
+            {"id": "spawn-missing-executable", "exit_code": 0, "stdout": "NK_OK spawn-missing-executable\n", "stderr": ""},
+        ],
+        "topology": "runner -> spawn probe -> one posix_spawn target when creation succeeds; probe exclusively collects confirmed targets",
     },
     "task-token": {
-        "case": {"id": "task-token", "exit_code": 0, "stdout": "NK_OK task-token\n", "stderr": ""},
-        "topology": "runner -> task-token probe -> one gated fork child; probe exclusively collects child",
+        "cases": [
+            {"id": "task-token-exchange-growth", "exit_code": 0, "stdout": "NK_OK task-token-exchange-growth\n", "stderr": ""},
+            {"id": "task-token-attribution", "exit_code": 0, "stdout": "NK_OK task-token-attribution\n", "stderr": ""},
+            {"id": "task-token-gate-write-failure", "exit_code": 0, "stdout": "NK_OK task-token-gate-write-failure\n", "stderr": ""},
+            {"id": "task-token-gate-close-failure", "exit_code": 0, "stdout": "NK_OK task-token-gate-close-failure\n", "stderr": ""},
+        ],
+        "topology": "runner -> task-token probe -> one gated fork child; probe exclusively collects each confirmed child",
     },
 }
 
@@ -101,8 +113,8 @@ def load_manifest(root):
             raise ProbeError("Task-token build cannot name a target")
 
     cases = data.get("cases")
-    expected_case = CAMPAIGNS[kind]["case"]
-    if not isinstance(cases, list) or cases != [expected_case]:
+    expected_cases = CAMPAIGNS[kind]["cases"]
+    if not isinstance(cases, list) or cases != expected_cases:
         raise ProbeError("Incorrect foundations case contract")
     return data
 
@@ -150,30 +162,32 @@ def run_bundle(root, output, preflight=False):
         receipt["artifact_execution_translated"] = bool(receipt["host"]["hardware_arm64"] or receipt["host"]["translated"])
         receipt["builds"] = manifest["builds"]
         (output / "logs").mkdir()
-        expected = CAMPAIGNS[kind]["case"]
         for build in manifest["builds"]:
-            verify_payload(root, manifest, manifest_digest)
-            name = build["name"] + "-" + expected["id"]
-            fixture = output / "fixtures" / name
-            fixture.mkdir(parents=True)
-            command = [str(require_file(root, build["path"]))]
-            if kind == "spawn":
-                command.append(str(require_file(root, build["target_path"])))
-            result = base.classify_case(base.run_bounded(command, fixture), expected)
-            if not preflight and result.get("started"):
-                receipt["target_runtime_observed"] = True
-            result.update(build=build["name"], case=expected["id"], expected=expected)
-            for stream in ("stdout", "stderr"):
-                log = output / "logs" / (name + "." + stream)
-                log.write_text(result[stream], encoding="utf-8")
-                result[stream + "_log"] = str(log.relative_to(output))
-            receipt["cases"].append(result)
-            print(name + ": " + result["status"], flush=True)
-            write_receipt(output, receipt)
+            for expected in CAMPAIGNS[kind]["cases"]:
+                verify_payload(root, manifest, manifest_digest)
+                name = build["name"] + "-" + expected["id"]
+                fixture = output / "fixtures" / name
+                fixture.mkdir(parents=True)
+                command = [str(require_file(root, build["path"]))]
+                if kind == "spawn":
+                    command.append(str(require_file(root, build["target_path"])))
+                command.append(expected["id"])
+                result = base.classify_case(base.run_bounded(command, fixture), expected)
+                if not preflight and result.get("started"):
+                    receipt["target_runtime_observed"] = True
+                result.update(build=build["name"], case=expected["id"], expected=expected)
+                for stream in ("stdout", "stderr"):
+                    log = output / "logs" / (name + "." + stream)
+                    log.write_text(result[stream], encoding="utf-8")
+                    result[stream + "_log"] = str(log.relative_to(output))
+                receipt["cases"].append(result)
+                print(name + ": " + result["status"], flush=True)
+                write_receipt(output, receipt)
         receipt["sources_after"] = verify_payload(root, manifest, manifest_digest)
         receipt["source_unchanged"] = receipt["sources_before"] == receipt["sources_after"]
         receipt["stages"].append({"name": "payload-after", "status": "passed"})
-        passed = len(receipt["cases"]) == len(base.BUILD_ROSTER) and all(case["status"] == "passed" for case in receipt["cases"])
+        expected_case_count = len(base.BUILD_ROSTER) * len(CAMPAIGNS[kind]["cases"])
+        passed = len(receipt["cases"]) == expected_case_count and all(case["status"] == "passed" for case in receipt["cases"])
         receipt["status"] = ("preflight_passed" if preflight else "passed") if passed else ("preflight_failed" if preflight else "failed")
         receipt["target_qualified"] = passed and not preflight
     except (OSError, ValueError, KeyError, TypeError) as error:
