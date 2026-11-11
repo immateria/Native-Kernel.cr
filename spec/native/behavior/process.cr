@@ -13,14 +13,45 @@ module Behavior
   end
 
   def self.session : Int32
+    inherited_group = Darwin::Process.getpgid
+    inherited_session = Darwin::Process.getsid
+    return 43 unless inherited_group.error == 0 && inherited_session.error == 0
+    child = Darwin::Process.fork
+    return 43 unless child.error == 0
+    if child.primary == 0
+      pid = Darwin::Process.pid.primary.to_i32!
+      invalid = Darwin::Process.setpgid(0, -1)
+      Darwin::Process.exit(44) unless invalid.primary == -1 && invalid.error == 22
+      created = Darwin::Process.setpgid(pid, pid)
+      group = Darwin::Process.getpgid
+      session = Darwin::Process.getsid
+      Darwin::Process.exit(44) unless created.error == 0 && created.primary == 0 && group.error == 0 && group.primary == pid && session.error == 0 && session.primary == inherited_session.primary
+
+      joined = Darwin::Process.setpgid(pid, inherited_group.primary.to_i32!)
+      group = Darwin::Process.getpgid(pid)
+      Darwin::Process.exit(44) unless joined.error == 0 && joined.primary == 0 && group.error == 0 && group.primary == inherited_group.primary
+
+      restored = Darwin::Process.setpgid(0, 0)
+      group = Darwin::Process.getpgid(pid)
+      session = Darwin::Process.getsid(pid)
+      refused = Darwin::Process.setsid
+      Darwin::Process.exit(restored.error == 0 && restored.primary == 0 && group.error == 0 && group.primary == pid && session.error == 0 && session.primary == inherited_session.primary && refused.primary == -1 && refused.error == 1 ? 0 : 44)
+    end
+    return 45 unless collect(child.primary.to_i32!, 0)
+
     child = Darwin::Process.fork
     return 43 unless child.error == 0
     if child.primary == 0
       pid = Darwin::Process.pid.primary
       session = Darwin::Process.setsid
-      observed = Darwin::Raw.call(310, 0_u64) # getsid(0)
-      group = Darwin::Raw.call(151, 0_u64)    # getpgid(0)
-      Darwin::Process.exit(session.error == 0 && session.primary == pid && observed.error == 0 && observed.primary == pid && group.error == 0 && group.primary == pid ? 0 : 44)
+      observed = Darwin::Process.getsid
+      group = Darwin::Process.getpgid
+      Darwin::Process.exit(44) unless session.error == 0 && session.primary == pid && observed.error == 0 && observed.primary == pid && group.error == 0 && group.primary == pid
+      observed = Darwin::Process.getsid(pid.to_i32!)
+      group = Darwin::Process.getpgid(pid.to_i32!)
+      refused_group = Darwin::Process.setpgid(0, 0)
+      refused_session = Darwin::Process.setsid
+      Darwin::Process.exit(observed.error == 0 && observed.primary == pid && group.error == 0 && group.primary == pid && refused_group.primary == -1 && refused_group.error == 1 && refused_session.primary == -1 && refused_session.error == 1 ? 0 : 44)
     end
     collect(child.primary.to_i32!, 0) ? 0 : 45
   end
@@ -35,7 +66,7 @@ module Behavior
     46
   end
 
-  def self.process : Int32
+  def self.process(path : UInt8*) : Int32
     required = Darwin::Process.list(Pointer(Void).null, 0)
     return 47 unless required.error == 0 && required.primary > 0 && required.primary < 1_000_000
     # Fixed caller-owned storage, with headroom and an explicit saturation check.
@@ -52,6 +83,7 @@ module Behavior
     end
     record = uninitialized Darwin::Process::Info::Record
     info = Darwin::Process.info(pid.to_i32!, Darwin::Process::Info::PIDT_BSDINFOWITHUNIQID, 0_u64, pointerof(record).as(Void*), sizeof(typeof(record)))
-    found && info.error == 0 && info.primary == sizeof(typeof(record)) && record.bsd.pid == pid && record.bsd.ppid == Darwin::Process.parent.primary && record.unique.unique_id != 0 ? 0 : 49
+    return 49 unless found && info.error == 0 && info.primary == sizeof(typeof(record)) && record.bsd.pid == pid && record.bsd.ppid == Darwin::Process.parent.primary && record.unique.unique_id != 0
+    spawn(path)
   end
 end

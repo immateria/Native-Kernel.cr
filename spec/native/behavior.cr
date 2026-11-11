@@ -4,6 +4,7 @@ require "./behavior/common"
 require "./behavior/descriptor"
 require "./behavior/socket"
 require "./behavior/process"
+require "./behavior/spawn"
 require "./behavior/signal"
 require "./behavior/audit"
 require "./behavior/event"
@@ -34,7 +35,7 @@ module Behavior
              elsif equal(name, "event".to_unsafe)
                event
              elsif equal(name, "process".to_unsafe)
-               process
+               process(target)
              else
                return 3
              end

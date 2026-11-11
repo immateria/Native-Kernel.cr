@@ -15,6 +15,9 @@ admit the releases their application has qualified. These availability floors
 are source-derived and do not certify all permitted operating-system versions.
 The process records follow SDK sys/proc_info.h and XNU sys/proc_info_private.h;
 the event record follows Darwin kevent64 on both supported architectures.
+`Spawn.profile` supplies the restricted private native64 spawn layout for Darwin
+24 and 25. It returns nil for other majors. The [process notes](darwin-process.md)
+record the source pins, fixed-copy rules and consumer qualification boundary.
 
 `Mach.read` validates message ID, declared size, NDR, success code and word count
 before reading payload. It rejects complex replies. An interrupted send retries
@@ -32,10 +35,10 @@ how to terminate an invalid trampoline. Resource limits use UInt64 native fields
 The unmanaged probe covers raw pipe dual returns, BSD errno, seventh/eighth
 arguments, raw fork discriminator and typed fork normalization with child-owned
 exit and parent collection, task acquisition/token exchange and cleanup, and
-stateless descriptor, event, resource, signal and process queries. Remaining
-session/sigreturn bodies are instantiated and reachable in LLVM behind an
-unselected fixture branch; that proves their generated dependency closure, not
-successful sigreturn or session creation. Native specs count Mach names before
+stateless descriptor, event, resource, signal and process queries. The original
+probe instantiated session/sigreturn bodies behind an unselected fixture branch;
+the later runner fixtures execute session creation and native sigreturn
+separately. Native specs count Mach names before
 and after repeated successful and invalid-destination reads.
 
 Both unoptimized and release reachable LLVM must reject managed runtime symbols,
@@ -81,4 +84,19 @@ The additional fixtures exercise successful descriptor, directory, socket,
 resource, session, exec, signal, audit-token, event and process operations in
 disposable processes. Their receipts report each run's actual coverage and
 failure state. Even a passing primitive suite does not qualify Process-Control's
-private spawn ABI or change that consumer's supported-release admission.
+authenticated startup or lifecycle. Its complete consumer suite remains a
+separate requirement.
+
+## Process additions on 2026-11-11
+
+The typed process surface adds `setpgid`, `getpgid` and `getsid`. The existing
+unmanaged session case now executes owned-child group creation/joining, inherited
+session queries, independent session creation and native leader refusals. The
+process case also spawns an audited exec fixture through `Spawn.create`, captures
+its exact output through a caller-owned pipe and collects exit 37 through its
+exclusive collector. Both optimization modes retain the strict LLVM and empty
+import gates. The coverage manifest names these positive paths explicitly.
+
+The hosted matrix must qualify the changed sources again. Source compatibility,
+an older receipt or a standalone spawn result does not establish consumer
+startup, abort, target status or cleanup behavior on a new release.

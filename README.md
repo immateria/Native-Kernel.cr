@@ -28,8 +28,8 @@ result = Kernel::Descriptor.pipe
 # The caller owns both descriptors and must close each.
 ```
 
-The typed entry supplies `Descriptor`, `Process`, `Resource`, `Signal`, `Event`
-and `Mach` primitives, plus native ABI records. BSD wrappers return `Result`;
+The typed entry supplies `Descriptor`, `Process`, `Spawn`, `Resource`, `Signal`,
+`Event` and `Mach` primitives, plus native ABI records. BSD wrappers return `Result`;
 `Process.signal` returns errno, and Mach wrappers return native Mach codes.
 These are direct mechanisms with caller-owned buffers and resources. The shard
 does not manage process identity, context ownership, signal policy, child status,
@@ -42,6 +42,9 @@ a returned count and a Mach/MIG status. Each read creates and releases a dedicat
 reply receive right before returning. The caller owns target send references and
 must release them independently. A failed cleanup result requires caller policy.
 See [the supported profiles](docs/support.md) before using kernel interfaces.
+
+The [Darwin process notes](docs/darwin-process.md) cover numeric group/session
+operations and the restricted private spawn layout for Darwin 24 and 25.
 
 The raw and typed entries need no managed runtime initialization, allocation,
 exceptions or external function calls. They can be used in an unmanaged custom
