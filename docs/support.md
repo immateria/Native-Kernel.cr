@@ -134,7 +134,36 @@ all four final profiles. The auditor's other restrictions remain unchanged.
 External receipts are under
 `macos-accounting-20261111/parent-final-nk-{arm64,x86}-{current,floor}` in the
 workspace test cache. Each binds 57 source/build inputs, with source and artifact
-hashes independently recomputed after qualification. Process-Control separately
-qualifies its target collection and version-2 accounting protocol. Earlier
-hosted results do not qualify this batch: new macOS 26, native Intel hardware,
-foreign-credential and protected-target execution remain unrun.
+hashes independently recomputed after qualification. The subsequent
+[hosted run 43051842375](https://github.com/immateria/Native-Kernel.cr/actions/runs/43051842375)
+at source `1e8b43a` passes all eight native macOS 15/26 cells and four forward
+replays. The separate
+[consumer run 43051959509](https://github.com/immateria/Process-Control.cr/actions/runs/43051959509)
+at source `f46af66`, pinned to that dependency, passes all eight native cells
+with 128 examples each. Those runs qualify their recorded source and artifacts.
+Foreign-credential and protected-target execution remain unrun.
+
+## Selected Monterey primitives on 2026-11-11
+
+The owner's Intel Mac Mini passes all 32 executions of the separate Monterey
+probe: eight cases for prebuilt Crystal 1.22.2 and 1.10.0 binaries, each in
+development and release modes. The host is macOS 12.7.6, build 21H1320,
+Darwin 21.6.0, xnu-8020.240.18.709.2, without translation. These binaries were
+built with minimum deployment version 12.0, strict reachable LLVM audits and
+empty imports before transfer; the target runner does not invoke a compiler.
+
+The selected cases cover descriptors, limits, numeric group/session operations,
+exec, native signals/return, kqueue exit observation, wait4/waitid/getrusage and
+typed process inspection. Their scope excludes the full core/audit/spawn cases.
+The Monterey entry omits the later-kernel wait4(INT_MIN) EINVAL assertion,
+following a source comparison with published xnu-8020.140.41. The exact shipping
+kernel source was unavailable. No complete raw-surface or Process-Control
+Darwin 21 launch/checked-control qualification follows from this subset.
+
+The returned manifest matches the retained 71-file payload before and after
+execution. All four build rosters, 32 exact results and 64 logs verify against
+the delivery and build records. External evidence lives under
+`monterey-probe-20261111/returned-x033pcte/` and
+`monterey-probe-20261111/returned-x033pcte-verification.json` in the workspace
+test cache. The workspace's dated Monterey probe review records provenance,
+loader evidence, the original ZIP's absence at return review and remaining gates.
