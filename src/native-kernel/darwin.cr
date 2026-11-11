@@ -1,0 +1,8 @@
+require "./darwin/raw"
+require "./darwin/abi"
+require "./darwin/descriptor"
+require "./darwin/process"
+require "./darwin/resource"
+require "./darwin/signal"
+require "./darwin/event"
+require "./darwin/mach"

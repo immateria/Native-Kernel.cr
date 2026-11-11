@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "scope": "Typed primitive positive regression mapping; not exhaustive syscall semantics or release qualification.",
+  "operations": {
+    "Descriptor.read": {
+      "positive_case": "descriptor"
+    },
+    "Descriptor.write": {
+      "positive_case": "descriptor"
+    },
+    "Descriptor.close": {
+      "positive_case": "descriptor"
+    },
+    "Descriptor.open": {
+      "positive_case": "descriptor"
+    },
+    "Descriptor.fcntl": {
+      "positive_case": "descriptor"
+    },
+    "Descriptor.pipe": {
+      "positive_case": "core"
+    },
+    "Descriptor.socket": {
+      "positive_case": "socket"
+    },
+    "Descriptor.connect": {
+      "positive_case": "socket"
+    },
+    "Descriptor.entries": {
+      "positive_case": "directory"
+    },
+    "Descriptor.seek": {
+      "positive_case": "descriptor"
+    },
+    "Process.pid": {
+      "positive_case": "core"
+    },
+    "Process.parent": {
+      "positive_case": "core"
+    },
+    "Process.fork": {
+      "positive_case": "core"
+    },
+    "Process.waitpid": {
+      "positive_case": "core"
+    },
+    "Process.setsid": {
+      "positive_case": "session"
+    },
+    "Process.execve": {
+      "positive_case": "exec"
+    },
+    "Process.exit": {
+      "positive_case": "core"
+    },
+    "Process.list": {
+      "positive_case": "process"
+    },
+    "Process.info": {
+      "positive_case": "process"
+    },
+    "Process.signal": {
+      "positive_case": "audit"
+    },
+    "Process.release": {
+      "positive_case": "core"
+    },
+    "Resource.get": {
+      "positive_case": "resource"
+    },
+    "Resource.set": {
+      "positive_case": "resource"
+    },
+    "Signal.kill": {
+      "positive_case": "signal"
+    },
+    "Signal.action": {
+      "positive_case": "signal"
+    },
+    "Signal.mask": {
+      "positive_case": "signal"
+    },
+    "Signal.restore": {
+      "positive_case": "signal"
+    },
+    "Event.queue": {
+      "positive_case": "event"
+    },
+    "Event.wait": {
+      "positive_case": "event"
+    },
+    "Event.poll": {
+      "positive_case": "core"
+    },
+    "Event.sleep": {
+      "positive_case": "core"
+    },
+    "Mach.task": {
+      "positive_case": "core"
+    },
+    "Mach.open": {
+      "positive_case": "core"
+    },
+    "Mach.retain": {
+      "positive_case": "core"
+    },
+    "Mach.release": {
+      "positive_case": "core"
+    },
+    "Mach.read": {
+      "positive_case": "core"
+    }
+  },
+  "raw_transport": [
+    "bsd_errno",
+    "mach_status",
+    "dual_returns",
+    "seventh_argument",
+    "eighth_argument",
+    "fork_discriminator"
+  ],
+  "consumer_spawn": "not_qualified"
+}

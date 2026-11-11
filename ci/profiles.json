@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "compilers": [
+    "1.10.0",
+    "1.22.2"
+  ],
+  "profiles": {
+    "macos-15-arm64": {
+      "runner": "macos-15",
+      "os_major": 15,
+      "darwin_major": 24,
+      "architecture": "arm64",
+      "state": "candidate"
+    },
+    "macos-15-x86_64": {
+      "runner": "macos-15-intel",
+      "os_major": 15,
+      "darwin_major": 24,
+      "architecture": "x86_64",
+      "state": "candidate"
+    },
+    "macos-26-arm64": {
+      "runner": "macos-26",
+      "os_major": 26,
+      "darwin_major": 25,
+      "architecture": "arm64",
+      "state": "candidate"
+    },
+    "macos-26-x86_64": {
+      "runner": "macos-26-intel",
+      "os_major": 26,
+      "darwin_major": 25,
+      "architecture": "x86_64",
+      "state": "candidate"
+    }
+  },
+  "consumer_spawn": "not_qualified_by_this_suite"
+}

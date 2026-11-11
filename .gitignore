@@ -1,0 +1,10 @@
+/lib/
+/bin/
+/.crystal/
+/shard.lock
+/shard.override.yml
+*.dwarf
+*.o
+.DS_Store
+__pycache__/
+*.pyc

@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "descriptor",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK descriptor\n",
+      "stderr": ""
+    },
+    {
+      "id": "directory",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK directory\n",
+      "stderr": ""
+    },
+    {
+      "id": "socket",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK socket\n",
+      "stderr": ""
+    },
+    {
+      "id": "resource",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK resource\n",
+      "stderr": ""
+    },
+    {
+      "id": "session",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK session\n",
+      "stderr": ""
+    },
+    {
+      "id": "exec",
+      "minimum_darwin": 22,
+      "exit_code": 37,
+      "stdout": "NK_EXEC_OK\n",
+      "stderr": ""
+    },
+    {
+      "id": "signal",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK signal\n",
+      "stderr": "S"
+    },
+    {
+      "id": "audit",
+      "minimum_darwin": 24,
+      "exit_code": 0,
+      "stdout": "NK_OK audit\n",
+      "stderr": ""
+    },
+    {
+      "id": "event",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK event\n",
+      "stderr": ""
+    },
+    {
+      "id": "process",
+      "minimum_darwin": 22,
+      "exit_code": 0,
+      "stdout": "NK_OK process\n",
+      "stderr": ""
+    }
+  ]
+}

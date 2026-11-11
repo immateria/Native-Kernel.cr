@@ -1,0 +1,152 @@
+name: Native macOS qualification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-kernel-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+
+jobs:
+  native:
+    if: ${{ github.event.repository.visibility == 'public' }}
+    name: ${{ matrix.profile }} / Crystal ${{ matrix.compiler }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        compiler: ['1.10.0', '1.22.2']
+        profile: [macos-15-arm64, macos-15-x86_64, macos-26-arm64, macos-26-x86_64]
+        include:
+          - profile: macos-15-arm64
+            runner: macos-15
+            arch: aarch64
+          - profile: macos-15-x86_64
+            runner: macos-15-intel
+            arch: x86_64
+          - profile: macos-26-arm64
+            runner: macos-26
+            arch: aarch64
+          - profile: macos-26-x86_64
+            runner: macos-26-intel
+            arch: x86_64
+    env:
+      NK_OUTPUT: /tmp/native-kernel-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install native dependencies
+        timeout-minutes: 8
+        shell: bash
+        run: bash scripts/ci/setup.sh dependencies '${{ matrix.profile }}' 2>&1 | tee "$RUNNER_TEMP/nk-setup.log"
+      - name: Install exact Crystal release
+        timeout-minutes: 8
+        uses: crystal-lang/install-crystal@36a22e9145188eec527c96e5a789ce4b832af587 # v1
+        with:
+          crystal: ${{ matrix.compiler }}
+          arch: ${{ matrix.arch }}
+          shards: false
+      - name: Verify compiler and native architecture
+        shell: bash
+        run: bash scripts/ci/setup.sh verify '${{ matrix.profile }}' '${{ matrix.compiler }}' 2>&1 | tee -a "$RUNNER_TEMP/nk-setup.log"
+      - name: Qualify actual host
+        timeout-minutes: 20
+        shell: bash
+        run: python3 scripts/ci/runner.py qualify --compiler crystal --profile '${{ matrix.profile }}' --output "$NK_OUTPUT"
+      - name: Preserve failure receipt and setup log
+        if: always()
+        shell: bash
+        run: |
+          fallback=0
+          if [[ ! -f "$NK_OUTPUT/export/receipt.json" ]]; then
+            fallback=1
+            if [[ -f scripts/ci/runner.py ]]; then
+              python3 scripts/ci/runner.py record-failure --profile '${{ matrix.profile }}' --output "$NK_OUTPUT" --reason 'Workflow stopped before qualification produced a receipt' || fallback=$?
+            else
+              mkdir -p "$NK_OUTPUT/export"
+              python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["NK_OUTPUT"])/"export"/"receipt.json"; p.write_text(json.dumps({"state":"incomplete","reason":"Checkout did not provide the qualification driver","profile":"${{ matrix.profile }}","source_sha":"${{ github.sha }}"})+"\n")'
+            fi
+          fi
+          mkdir -p "$NK_OUTPUT/export/logs"
+          if [[ -f "$RUNNER_TEMP/nk-setup.log" ]]; then
+            python3 -c 'import os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"nk-setup.log"; f=p.open("rb"); f.seek(max(0,p.stat().st_size-65536)); (pathlib.Path(os.environ["NK_OUTPUT"])/"export"/"logs"/"setup.log").write_bytes(f.read(65536))'
+          fi
+          exit "$fallback"
+      - name: Retain bounded qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.profile }}-crystal-${{ matrix.compiler }}
+          path: ${{ env.NK_OUTPUT }}/export/
+          retention-days: 3
+          compression-level: 9
+          if-no-files-found: error
+
+  forward:
+    if: ${{ !cancelled() && github.event.repository.visibility == 'public' }}
+    name: Forward ${{ matrix.source_profile }} to ${{ matrix.profile }} / Crystal ${{ matrix.compiler }}
+    needs: native
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        compiler: ['1.10.0', '1.22.2']
+        profile: [macos-26-arm64, macos-26-x86_64]
+        include:
+          - profile: macos-26-arm64
+            source_profile: macos-15-arm64
+            runner: macos-26
+          - profile: macos-26-x86_64
+            source_profile: macos-15-x86_64
+            runner: macos-26-intel
+    env:
+      NK_OUTPUT: /tmp/forward-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download only same-architecture macOS 15 build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-${{ matrix.source_profile }}-crystal-${{ matrix.compiler }}
+          path: ${{ runner.temp }}/native-kernel-origin
+      - name: Replay macOS 15 executables on actual macOS 26 host
+        timeout-minutes: 10
+        shell: bash
+        run: python3 scripts/ci/runner.py replay --input "$RUNNER_TEMP/native-kernel-origin" --profile '${{ matrix.profile }}' --output "$NK_OUTPUT"
+      - name: Preserve incomplete forward receipt
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -f "$NK_OUTPUT/export/receipt.json" ]]; then
+            if [[ -f scripts/ci/runner.py ]]; then
+              python3 scripts/ci/runner.py record-failure --profile '${{ matrix.profile }}' --output "$NK_OUTPUT" --reason 'Workflow stopped before forward replay produced a receipt'
+            else
+              mkdir -p "$NK_OUTPUT/export"
+              python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["NK_OUTPUT"])/"export"/"receipt.json"; p.write_text(json.dumps({"state":"incomplete","reason":"Checkout did not provide the replay driver","profile":"${{ matrix.profile }}","source_sha":"${{ github.sha }}"})+"\n")'
+              exit 1
+            fi
+          fi
+      - name: Retain bounded forward evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: forward-${{ matrix.profile }}-crystal-${{ matrix.compiler }}
+          path: ${{ env.NK_OUTPUT }}/export/
+          retention-days: 3
+          compression-level: 9
+          if-no-files-found: error
