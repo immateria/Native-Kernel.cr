@@ -102,6 +102,15 @@ run, recorded in [the dated results](../docs/ci-results.md#separate-consumer-qua
 Native-Kernel receipts alone do not change a consumer's release admission.
 See [the support boundaries](../docs/support.md).
 
+The separate Darwin 21 private-spawn and task-token handoff is intentionally
+outside this runner matrix and outside the existing eight-case Monterey
+primitive bundle. On a native Intel Darwin build host, build its two
+manifest-bound bundles with `scripts/compat/build_monterey_foundations.py`, then
+run each bundle with `monterey_foundations_runner.py` on the exact Mini. The
+[Monterey foundations audit](../docs/darwin-monterey-foundations.md) gives the
+exact commands, source limitation and receipt gates. Neither a bundle build nor
+a preflight execution qualifies Process-Control.
+
 The collection/inspection batch adds two source-bound behavior cases, bringing
 the required roster to twelve. `collection` exercises wait4, waitid and
 getrusage with exclusive owned-child collection, observation and copyout-fault

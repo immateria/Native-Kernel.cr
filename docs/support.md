@@ -8,27 +8,40 @@ they do not require the Darwin entries. There is no native Linux or Windows
 backend in this shard.
 
 The BSD syscall and Mach trap numbers, register conventions and ABI records
-were inherited from the original Darwin implementation. The task-info request
-uses the mach_msg2 protocol introduced in Darwin 22; audit-token signaling uses
-Darwin 24. `Process.release` queries the kernel major without caching it. Callers
-admit the releases their application has qualified. These availability floors
-are source-derived and do not certify all permitted operating-system versions.
+were inherited from the original Darwin implementation. The modern task-info
+request uses mach_msg2, introduced in Darwin 22; the separately selected Darwin
+21 profile uses the seven-argument mach_msg_trap transport for the same audited
+TASK_AUDIT_TOKEN request. Its source profile is not a Monterey runtime claim.
+`Process.release` queries the kernel major without caching it. Callers admit the
+releases their application has qualified. These availability floors are
+source-derived and do not certify all permitted operating-system versions.
 The process records follow SDK sys/proc_info.h and XNU sys/proc_info_private.h;
 the event record follows Darwin kevent64 on both supported architectures.
 The [accounting and inspection ABI](darwin-accounting.md) records the three
 official Darwin 24/25 source pins for wait4, waitid, getrusage, BSD/task
 information and PID usage v0/v1/v2. Checked PIDINFO uses slot 545; PID usage is
 PID-keyed and does not inherit that operation's identity comparisons.
-`Spawn.profile` supplies the restricted private native64 spawn layout for Darwin
-24 and 25. It returns nil for other majors. The [process notes](darwin-process.md)
-record the source pins, fixed-copy rules and consumer qualification boundary.
+`Spawn.profile` supplies separately restricted private native64 spawn layouts for
+Darwin 21, 24 and 25. It returns nil for other majors; Darwin 21 does not reuse
+the later 192-byte prefix. The [process notes](darwin-process.md) and the dated
+[Monterey foundations audit](darwin-monterey-foundations.md) record source pins,
+fixed-copy rules, build handoff and the consumer qualification boundary.
 
 `Mach.read` validates message ID, declared size, NDR, success code and word count
 before reading payload. It rejects complex replies. An interrupted send retries
 the send; an interrupted receive retries only receive. Every native exchange
 return attempts release of its dedicated receive right in the explicit caller
 current task. The supplied current-task name must designate that caller. Invalid
-names can prevent cleanup; the shard has no context owner to repair them.
+names can prevent cleanup; the shard has no context owner to repair them. Modern
+calls default to mach_msg2; `Mach.transport(21)` selects the audited
+seven-argument mach_msg_trap route and must be passed before the first send.
+
+The compatibility name-count query returns count, operation code and cleanup
+code separately. It snapshots received OOL ownership before validating MIG
+semantics, including partial-body receive errors, and attempts every recognized
+mapping release. Both codes must be zero before using a count. Unexpected
+carried-right or structural variants report cleanup uncertainty; this private
+kernel-RPC cleanup is not a general message destructor.
 
 `Signal.action` accepts the exact native action including trampoline and flags.
 It does not install a target-reset policy or add flags. `Signal.restore` returns

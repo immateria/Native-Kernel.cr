@@ -125,6 +125,9 @@
     "Mach.read": {
       "positive_case": "core"
     },
+    "Mach.port_name_count": {
+      "positive_case": "core"
+    },
     "Process.wait4": {
       "positive_case": "collection"
     },
@@ -136,6 +139,15 @@
     },
     "Process.usage": {
       "positive_case": "inspection"
+    },
+    "Mach.transport": {
+      "positive_case": "core"
+    },
+    "Mach.decode_task_audit_reply": {
+      "positive_case": "core"
+    },
+    "Mach.retry_phase": {
+      "positive_case": "core"
     }
   },
   "raw_transport": [

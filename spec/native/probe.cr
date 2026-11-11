@@ -44,18 +44,33 @@ module Probe
   end
 
   def self.mach : Int32
+    transport = Darwin::Mach.transport(Darwin::Process.release)
+    return 9 unless transport
     task = Darwin::Mach.task
     return 9 if task == 0 || task == UInt32::MAX
+    before_names, names_read, names_cleanup = Darwin::Mach.port_name_count(task, transport)
+    return 10 unless names_read == 0 && names_cleanup == 0
     name, code = Darwin::Mach.open(task, Darwin::Process.pid.primary.to_i32!)
-    return 10 unless code == 0
+    return 11 unless code == 0
     retained = Darwin::Mach.retain(task, name)
-    words, count, read = Darwin::Mach.read(task, name)
-    _invalid, _count, invalid = Darwin::Mach.read(task, 0xfffffffe_u32)
+    words, count, read = Darwin::Mach.read(task, name, transport)
+    _invalid, _count, invalid = Darwin::Mach.read(task, 0xfffffffe_u32, transport)
+    # Measure repeated exchanges without managed-runtime observers or GC.
+    repeated = 0
+    while repeated < 100
+      _words, repeated_count, repeated_code = Darwin::Mach.read(task, name, transport)
+      read = repeated_code if repeated_code != 0
+      read = -300 unless repeated_count == 8
+      _failed, failed_count, failed_code = Darwin::Mach.read(task, 0xfffffffe_u32, transport)
+      invalid = 0 if failed_code == 0 || failed_count != 0
+      repeated &+= 1
+    end
     release = Darwin::Mach.release(task, name)
     release_again = Darwin::Mach.release(task, name)
+    after_names, names_after, after_cleanup = Darwin::Mach.port_name_count(task, transport)
     task_release = Darwin::Mach.release(task, task)
-    return 11 unless retained == 0 && read == 0 && count == 8 && words.to_unsafe[5] == Darwin::Process.pid.primary && invalid != 0
-    return 12 unless release == 0 && release_again == 0 && task_release == 0
+    return 12 unless retained == 0 && read == 0 && count == 8 && words.to_unsafe[5] == Darwin::Process.pid.primary && invalid != 0 && names_after == 0 && after_cleanup == 0 && after_names == before_names
+    return 13 unless release == 0 && release_again == 0 && task_release == 0
     0
   end
 
