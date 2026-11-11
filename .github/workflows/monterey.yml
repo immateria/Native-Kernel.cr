@@ -1,0 +1,160 @@
+name: Build Monterey Mini handoff
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-kernel-monterey-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+
+jobs:
+  build:
+    if: ${{ github.event.repository.visibility == 'public' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      NK_BUILD: ${{ runner.temp }}/native-kernel-monterey-build
+      NK_HANDOFF: ${{ runner.temp }}/native-kernel-monterey-foundations
+      NK_EVIDENCE: ${{ runner.temp }}/native-kernel-monterey-evidence
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install native dependencies
+        timeout-minutes: 8
+        shell: bash
+        run: bash scripts/ci/setup.sh dependencies macos-15-x86_64 2>&1 | tee "$RUNNER_TEMP/nk-monterey-setup.log"
+      - name: Install current Crystal
+        uses: crystal-lang/install-crystal@36a22e9145188eec527c96e5a789ce4b832af587 # v1
+        timeout-minutes: 8
+        with:
+          crystal: '1.22.2'
+          arch: x86_64
+          shards: false
+          destination: ${{ runner.temp }}/nk-crystal-current
+      - name: Verify and retain current compiler path
+        id: current
+        shell: bash
+        run: |
+          export PKG_CONFIG_PATH="${PKG_CONFIG_LIBDIR:?missing selected dependency path}"
+          printf 'PKG_CONFIG_PATH=%s\n' "$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          bash scripts/ci/setup.sh verify macos-15-x86_64 1.22.2
+          printf 'compiler=%s\n' "$(command -v crystal)" >> "$GITHUB_OUTPUT"
+      - name: Install floor Crystal
+        uses: crystal-lang/install-crystal@36a22e9145188eec527c96e5a789ce4b832af587 # v1
+        timeout-minutes: 8
+        with:
+          crystal: '1.10.0'
+          arch: x86_64
+          shards: false
+          destination: ${{ runner.temp }}/nk-crystal-floor
+      - name: Verify and retain floor compiler path
+        id: floor
+        shell: bash
+        run: |
+          export PKG_CONFIG_PATH="${PKG_CONFIG_LIBDIR:?missing selected dependency path}"
+          printf 'PKG_CONFIG_PATH=%s\n' "$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          bash scripts/ci/setup.sh verify macos-15-x86_64 1.10.0
+          printf 'compiler=%s\n' "$(command -v crystal)" >> "$GITHUB_OUTPUT"
+      - name: Build both source-bound compatibility campaigns
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          python3 -B scripts/compat/build_monterey_foundations.py \
+            --current '${{ steps.current.outputs.compiler }}' \
+            --floor '${{ steps.floor.outputs.compiler }}' \
+            --output "$NK_BUILD"
+      - name: Package executable bundles and build identity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil
+          build = pathlib.Path(os.environ['NK_BUILD'])
+          handoff = pathlib.Path(os.environ['NK_HANDOFF'])
+          receipt = json.loads((build / 'build-receipt.json').read_text())
+          if receipt['status'] != 'built' or not receipt['source_unchanged']:
+              raise SystemExit('Incomplete or changed-source build cannot be packaged')
+          handoff.mkdir(mode=0o700)
+          for kind in ('spawn', 'task-token'):
+              if receipt['campaigns'][kind]['status'] != 'built':
+                  raise SystemExit('Both campaigns must have qualifying build manifests')
+              shutil.copytree(build / kind, handoff / kind)
+          shutil.copy2(build / 'build-receipt.json', handoff / 'build-receipt.json')
+          provenance = {
+              'schema': 1, 'repository': os.environ['GITHUB_REPOSITORY'],
+              'revision': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'run_url': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
+              'build_receipt_sha256': hashlib.sha256((handoff / 'build-receipt.json').read_bytes()).hexdigest(),
+          }
+          (handoff / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          (handoff / 'README.txt').write_text(
+              'Native-Kernel Monterey foundations\n\n'
+              'Run on macOS 12.7.6 / 21H1320 / Darwin 21.6.0, native Intel.\n'
+              'From this directory, run both commands separately, even if one fails:\n\n'
+              '  /usr/bin/python3 -I spawn/monterey_foundations_runner.py\n'
+              '  /usr/bin/python3 -I task-token/monterey_foundations_runner.py\n\n'
+              'Return both results ZIP paths printed by the runners. No Crystal is needed.\n'
+              'Spawn runs 28 cases; task-token runs 16. This does not qualify Process-Control.\n')
+          PY
+          /usr/bin/ditto -c -k --keepParent "$NK_HANDOFF" "$NK_HANDOFF.zip"
+          cd "$RUNNER_TEMP"
+          /usr/bin/shasum -a 256 native-kernel-monterey-foundations.zip > native-kernel-monterey-foundations.zip.sha256
+      - name: Retain Mini download with executable permissions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: monterey-foundations-${{ github.sha }}
+          path: |
+            ${{ env.NK_HANDOFF }}.zip
+            ${{ env.NK_HANDOFF }}.zip.sha256
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+      - name: Preserve bounded build evidence
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, shutil
+          build = pathlib.Path(os.environ['NK_BUILD'])
+          evidence = pathlib.Path(os.environ['NK_EVIDENCE'])
+          evidence.mkdir(mode=0o700)
+          context = {name: os.environ.get(name) for name in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}
+          (evidence / 'workflow.json').write_text(json.dumps(context, indent=2) + '\n')
+          receipt = build / 'build-receipt.json'
+          if receipt.is_file():
+              shutil.copy2(receipt, evidence / receipt.name)
+          logs = list((build / 'logs').glob('*.log'))
+          logs.append(pathlib.Path(os.environ['RUNNER_TEMP']) / 'nk-monterey-setup.log')
+          for source in logs:
+              if source.is_file():
+                  with source.open('rb') as stream:
+                      stream.seek(max(0, source.stat().st_size - 65536))
+                      (evidence / source.name).write_bytes(stream.read(65536))
+          used = 0
+          for pattern in ('*/*/*.ll', '*/*/*.o'):
+              for source in sorted((build / 'work').glob(pattern)):
+                  size = source.stat().st_size
+                  used += size
+                  if size > 32 * 1024 * 1024 or used > 64 * 1024 * 1024:
+                      raise SystemExit('Raw build evidence exceeds its bound')
+                  target = evidence / 'raw' / source.relative_to(build / 'work')
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(source, target)
+          PY
+      - name: Retain build receipt and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: monterey-build-evidence-${{ github.sha }}
+          path: ${{ env.NK_EVIDENCE }}
+          retention-days: 3
+          compression-level: 9
+          if-no-files-found: error
