@@ -18,3 +18,19 @@ describe Native::Kernel::Source do
     Native::Kernel::Audit::ASSEMBLY.each { |key| key.count('\0').should eq(1) }
   end
 end
+
+describe "portable Linux assembly metadata" do
+  it "keeps the OS and architecture admission sets distinct" do
+    darwin = Native::Kernel::Audit::ASSEMBLY
+    x86 = Native::Kernel::Audit::LINUX_X86_64_ASSEMBLY
+    arm = Native::Kernel::Audit::LINUX_AARCH64_ASSEMBLY
+    x86.size.should eq(2)
+    arm.size.should eq(2)
+    [x86, arm].each do |keys|
+      keys.should contain("\0~{memory}")
+      keys.each { |key| key.count('\0').should eq(1) }
+      keys.each { |key| darwin.should_not contain(key) unless key == "\0~{memory}" }
+    end
+    x86.last.should_not eq(arm.last)
+  end
+end
