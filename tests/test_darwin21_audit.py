@@ -12,8 +12,10 @@ class Darwin21Audit(unittest.TestCase):
         compiler = shutil.which("cc")
         if compiler is None:
             self.skipTest("C compiler unavailable")
+        # Use the compiler's native LP64 target, including ARM64 where -m64 is
+        # not an option. The C pointer-width/layout assertions remain mandatory.
         result = subprocess.run(
-            [compiler, "-m64", "-std=c11", "-Wall", "-Werror", "-fsyntax-only",
+            [compiler, "-std=c11", "-Wall", "-Werror", "-fsyntax-only",
              str(ROOT / "scripts/compat/darwin21_spawn_layout.c")],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )

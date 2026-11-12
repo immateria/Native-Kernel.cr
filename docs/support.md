@@ -2,10 +2,19 @@
 
 Initial source extraction: 2026-11-10, Process-Control `85b0103`.
 
-The raw and typed entries compile only on Darwin ARM64 and x86-64. Other raw
-profiles refuse explicitly. `source` and `audit` are portable managed metadata;
-they do not require the Darwin entries. There is no native Linux or Windows
-backend in this shard.
+Darwin's raw and typed entries compile only on Darwin ARM64 and x86-64.
+Separate Linux entries implement non-Android LP64 Linux AArch64 and x86-64;
+their four native mechanisms cells passed in
+[hosted run 43162651064](https://github.com/immateria/Native-Kernel.cr/actions/runs/43162651064),
+as recorded in the [Linux validation](linux-validation.md). Qualification is
+still incomplete outside those recorded artifacts, hosts and mechanism cases.
+The [Linux contracts](linux-process.md) separate raw errno, pidfd observation
+and exclusive collection from Darwin.
+Android, other Linux architectures/word sizes, Windows and cross-OS direct
+requires refuse explicitly. `source` and `audit` remain portable managed
+metadata and do not require either platform's execution entries. The top-level
+require remains Darwin. Existing Darwin support claims below are unchanged;
+they do not qualify the new Linux profile.
 
 The BSD syscall and Mach trap numbers, register conventions and ABI records
 were inherited from the original Darwin implementation. The modern task-info

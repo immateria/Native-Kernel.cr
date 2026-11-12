@@ -7,9 +7,7 @@ require "../src/native-kernel/source"
 require "../src/native-kernel/audit"
 require "./verification"
 
-{% unless flag?(:darwin) && (flag?(:aarch64) || flag?(:x86_64)) %}
-  {% raise "Native artifact qualification requires Darwin ARM64 or x86-64." %}
-{% end %}
+{% if flag?(:darwin) && (flag?(:aarch64) || flag?(:x86_64)) %}
 
 compiler = ENV["CRYSTAL"]? || "crystal"
 description = IO::Memory.new
@@ -70,3 +68,21 @@ sources.each do |name, digest|
 end
 File.write(File.join(destination, "manifest.json"), {"compiler" => Crystal::DESCRIPTION, "sources" => sources, "artifacts" => artifacts, "assembly" => assembly.to_a.sort}.to_json)
 puts "Receipts #{destination}"
+
+{% elsif flag?(:linux) && !flag?(:android) && flag?(:bits64) && (flag?(:gnu) || flag?(:musl)) && (flag?(:aarch64) || flag?(:x86_64)) %}
+  abort "Pass at most one external receipt directory." if ARGV.size > 1
+  compiler = ENV["CRYSTAL"]? || "crystal"
+  destination = File.expand_path(
+    ARGV.first? || File.join(Dir.tempdir, "native-kernel-linux-#{Random::Secure.hex(8)}")
+  )
+  result = Process.run(
+    "python3",
+    [File.join(Native::Kernel::Source.root, "scripts/ci/linux_runner.py"), "--compiler", compiler, "--output", destination],
+    chdir: Native::Kernel::Source.root,
+    output: STDOUT,
+    error: STDERR
+  )
+  exit result.exit_code
+{% else %}
+  {% raise "Native artifact verification requires Darwin ARM64/x86-64 or non-Android Linux LP64 AArch64/x86-64." %}
+{% end %}

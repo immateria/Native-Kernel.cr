@@ -1,7 +1,12 @@
 # Native-Kernel
 
-Native-Kernel supplies direct Darwin BSD syscall and Mach trap entry for Crystal
-1.10.0 and later on ARM64 and x86-64. It has no runtime shard dependencies.
+Native-Kernel supplies direct Darwin BSD/Mach and separate Linux process
+mechanisms for Crystal 1.10.0 and later on ARM64/AArch64 and x86-64. It has no
+runtime shard dependencies. The four native Linux mechanisms cells passed in
+[hosted run 43162651064](https://github.com/immateria/Native-Kernel.cr/actions/runs/43162651064)
+on 2026-11-12. That result qualifies the recorded source, artifacts and hosts;
+the [remaining validation limits](docs/linux-validation.md) keep broader Linux
+and consumer qualification incomplete.
 The assembly engines were extracted from Process-Control commit `85b0103` on
 2026-11-10. On 2026-11-11, the x86-64 condition-code clobber was corrected to
 LLVM's `flags` register name; the [accounting review](docs/darwin-accounting.md)
@@ -66,6 +71,25 @@ exceptions or external function calls. They can be used in an unmanaged custom
 entry built with `-Dwithout_main`; the artifact probe demonstrates that boundary.
 Ordinary managed Crystal programs retain their own runtime dependencies.
 
+## Separate Linux entries
+
+`require "native-kernel/linux/raw"` provides zero-to-six-argument Linux entry;
+`require "native-kernel/linux"` adds caller-owned descriptor, process, pidfd,
+ppoll, collection and resource mechanisms. Linux's signed `Result.primary`
+retains negative errno words, and `error` decodes **only [-4095, -1]**. There is
+no second return register. Android and non-LP64/other targets refuse explicitly.
+The existing top-level entry remains Darwin; no automatic Linux admission is
+added. See [Linux contracts, ABI/source pins and ownership](docs/linux-process.md).
+
+Linux `make check`/`make native` now dispatch to a real ELF `_start`, strict
+per-architecture LLVM audit and static no-import link/run path in both modes.
+The [native Linux workflow](.github/workflows/linux.yml) targets x86-64 and
+AArch64 for both reviewed compilers. All four cells passed at source `2ef0ade`
+in [hosted run 43162651064](https://github.com/immateria/Native-Kernel.cr/actions/runs/43162651064).
+The earlier local compiler-download block, C-only evidence and remaining
+unqualified native EINTR are recorded in the
+[dated Linux validation](docs/linux-validation.md); they are not hidden skips.
+
 Build metadata has separate, portable require entries:
 
 ```crystal
@@ -80,10 +104,11 @@ assembly-text/NUL/constraint keys, including the memory barrier. Consumers can
 bind helper fingerprints and reachable-IR audits to those inputs. Metadata never
 enters the raw or typed require graph.
 
-Run `make check`; on Darwin this also verifies and runs unmanaged development
-and release artifacts with no undefined imports. `make native` runs that artifact
-check alone; `RECEIPTS=/external/new-directory` retains its source/IR/executable
-hash manifest. Use an external `CRYSTAL_CACHE_DIR`. No build output enters this
+Run `make check`; on supported Darwin and Linux this also verifies and runs
+unmanaged development and release artifacts with no undefined imports.
+`make native` runs that artifact check alone;
+`RECEIPTS=/external/new-directory` retains its source/IR/executable hash
+manifest. Use an external `CRYSTAL_CACHE_DIR`. No build output enters this
 repository. See [AGENTS.md](AGENTS.md) for maintenance requirements.
 
 The [macOS runner suite](ci/README.md) passed all eight native compiler/host cells
