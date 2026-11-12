@@ -449,6 +449,7 @@ class Runner:
         self.cc = shlex.split(args.cc)
         if not self.cc:
             raise ProofError("Select a nonempty C compiler command")
+        self.compiler_llvm_version = None
         self.llvm_llc = None
         self.llvm_llc_version = None
         self.receipt = {
@@ -575,6 +576,12 @@ class Runner:
         version, target = common.compiler_version(result["stdout"])
         if version not in self.config["compilers"] or (self.args.expected_compiler and self.args.expected_compiler != version):
             raise ProofError("Compiler must match the exact reviewed release")
+        llvm_version = re.search(r"^LLVM:\s*(\d+(?:\.\d+)+)\s*$", result["stdout"], re.M)
+        if not llvm_version:
+            raise ProofError("Compiler identity does not report its LLVM major/minor version")
+        self.compiler_llvm_version = llvm_version[1]
+        if version == "1.10.0" and self.compiler_llvm_version.split(".", 1)[0] != "15":
+            raise ProofError("Crystal 1.10.0 floor codegen requires the reviewed LLVM 15 compiler backend")
         if not target.startswith(self.host_arch + "-") or not re.search(r"linux-(?:gnu|musl)$", target):
             raise ProofError("Compiler default target must be native non-Android LP64 Linux")
         # Official Linux archives contain a direct ELF executable. An arbitrary
@@ -583,7 +590,7 @@ class Runner:
         if len(binary) < 64 or binary[:7] != b"\x7fELF\x02\x01\x01" or struct.unpack_from("<H", binary, 18)[0] != ARCHITECTURES[self.host_arch]:
             raise ProofError("Select the actual native ELF Crystal binary, not a wrapper")
         self.receipt["compiler"] = {"path": compiler, "sha256": common.sha256_file(compiler), "version": version,
-                                    "default_target": target, "description": result["stdout"],
+                                    "llvm_version": self.compiler_llvm_version, "default_target": target, "description": result["stdout"],
                                     "identity_scope": "compiler ELF and selected stdlib (not all SDK/linker inputs)"}
         self.env["CRYSTAL"] = compiler
         environment = self.stage("compiler-env", [compiler, "env"], timeout=20)
@@ -696,19 +703,25 @@ class Runner:
         if optimization not in ("development", "release"):
             raise ProofError("Unknown LLVM optimization profile")
         if not self.llvm_llc:
-            candidate = shutil.which("llc-14")
+            if not self.compiler_llvm_version:
+                raise ProofError("The exact Crystal compiler's LLVM version was not identified")
+            major = self.compiler_llvm_version.split(".", 1)[0]
+            tool_name = "llc-" + major
+            candidate = shutil.which(tool_name)
             if not candidate or not Path(candidate).is_file():
-                raise ProofError("Crystal 1.10.0 codegen requires the LLVM 14 llc object writer")
+                raise ProofError("Crystal 1.10.0 codegen requires " + tool_name + " matching its LLVM IR producer")
             path = str(Path(candidate).resolve())
-            result = self.stage("identity-llc-14", [path, "--version"], timeout=20)
-            match = re.search(r"\bLLVM version (\d+(?:\.\d+)*)", result["stdout"])
-            if not match or match[1].split(".", 1)[0] != "14":
-                raise ProofError("The floor LLVM codegen tool must have major version 14")
+            result = self.stage("identity-" + tool_name, [path, "--version"], timeout=20)
+            match = re.search(r"LLVM version ([0-9]+(?:\.[0-9]+)*)", result["stdout"])
+            if not match or match[1].split(".", 1)[0] != major:
+                raise ProofError("The floor LLVM codegen tool must match compiler LLVM major " + major)
             self.llvm_llc, self.llvm_llc_version = path, match[1]
-            self.receipt.setdefault("tools", {})["llc_14"] = {"path": path, "sha256": common.sha256_file(path)}
+            tool_key = "llc_" + major
+            self.receipt.setdefault("tools", {})[tool_key] = {"path": path, "sha256": common.sha256_file(path)}
             self.receipt["floor_codegen_tool"] = {
-                "name": "llc-14", "path": path, "sha256": common.sha256_file(path), "version": match[1],
-                "operation": "Lower the exact audited compiler LLVM IR to ELF object sections without parsing emitted assembly",
+                "name": tool_name, "path": path, "sha256": common.sha256_file(path), "version": match[1],
+                "compiler_llvm_version": self.compiler_llvm_version,
+                "operation": "Lower the exact audited compiler LLVM IR with the matching LLVM major to ELF object sections",
                 "options": ["-opaque-pointers", "-function-sections", "-data-sections"],
                 "optimization_mapping": {"development": "-O=0 (Crystal CodeGenOptLevel::None)",
                                           "release": "-O=3 (Crystal CodeGenOptLevel::Aggressive)"}}
@@ -752,10 +765,10 @@ class Runner:
         if self.version == "1.10.0":
             # GNU as and LLVM MC both reject escaped quoted local symbols in
             # Crystal 1.10's printer output. Lower the audited, unmodified IR
-            # directly with matching LLVM 14's object writer instead.
+            # directly with the compiler-matching LLVM 15 object writer instead.
             section_record = {"emitted_assembly_sha256": common.sha256_file(assembly), "functions": functions,
                               "llvm_ir_sha256": common.sha256_file(ir), "optimization": optimization,
-                              "operation": "Lower the exact audited LLVM IR with llc-14 -function-sections -data-sections; retain emitted assembly as evidence without rewriting it or passing it to an assembler"}
+                              "operation": "Lower the exact audited LLVM IR with matching LLVM 15 llc -opaque-pointers -function-sections -data-sections; retain emitted assembly as evidence without rewriting it or passing it to an assembler"}
             record["function_sections"] = section_record
             self.write()
             command = self.llvm_codegen_command(ir, obj, triple[1], optimization)
@@ -950,7 +963,7 @@ def receipt_review(path):
     diagnostic_stage_emitted = False
     for stage in receipt["stages"]:
         record = {key: stage.get(key) for key in ("name", "status", "exit_code", "output_truncated", "expected_rejection")}
-        if stage["name"].startswith(("compile-", "lower-")) or stage["name"] in ("format", "identity-llc-14"):
+        if stage["name"].startswith(("compile-", "lower-", "identity-llc-")) or stage["name"] == "format":
             record["command"] = stage["command"]
         if stage["name"].startswith("imports-"):
             record.update(stdout=stage["stdout"], stderr=stage["stderr"])

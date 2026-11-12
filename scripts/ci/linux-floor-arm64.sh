@@ -22,8 +22,8 @@ git -C "$source" checkout --detach "$revision"
 export CRYSTAL_CACHE_DIR="$base/cache"
 # The tagged source's bin/crystal explicitly selects its own stdlib; make uses
 # the native bootstrap only as the compiler, never a translated x86 binary.
-env -u CRYSTAL_PATH make -C "$source" crystal release=1 CRYSTAL="$bootstrap" LLVM_CONFIG=/usr/bin/llvm-config-14
-make -C "$source" install PREFIX="$base/install" CRYSTAL="$bootstrap" LLVM_CONFIG=/usr/bin/llvm-config-14
+env -u CRYSTAL_PATH make -C "$source" crystal release=1 CRYSTAL="$bootstrap" LLVM_CONFIG=/usr/bin/llvm-config-15
+make -C "$source" install PREFIX="$base/install" CRYSTAL="$bootstrap" LLVM_CONFIG=/usr/bin/llvm-config-15
 "$base/install/bin/crystal" --version
 "$base/install/bin/crystal" --version | grep -E '^Crystal 1\.10\.0( |$)'
 "$base/install/bin/crystal" --version | grep -E '^Default target: aarch64-.*linux-gnu$'

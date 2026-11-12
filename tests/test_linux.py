@@ -580,8 +580,9 @@ class LinuxCodegenToolTests(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.proof = runner.Runner(proof_args(self.directory / "proof", expected_compiler="1.10.0"))
         self.proof.compiler, self.proof.version = "fixture-compiler", "1.10.0"
-        self.tool = self.directory / "llc-14"
-        self.tool.write_bytes(b"fixture LLVM llc 14 executable")
+        self.proof.compiler_llvm_version = "15.0.7"
+        self.tool = self.directory / "llc-15"
+        self.tool.write_bytes(b"fixture LLVM llc 15 executable")
 
     def test_floor_build_lowers_audited_ir_directly_and_retains_original_assembly(self):
         stdlib = self.directory / "selected stdlib"
@@ -600,8 +601,8 @@ class LinuxCodegenToolTests(unittest.TestCase):
                 Path(str(output) + ".ll").write_text('target triple = "x86_64-unknown-linux-gnu"\n')
                 Path(str(output) + ".s").write_text(".type main,@function\nmain:\nret\n.size main,.-main\n")
                 Path(str(output) + ".o").write_bytes(elf_object_bytes(functions=1))
-            elif name == "identity-llc-14":
-                return stage_result(stdout="LLVM version 14.0.6\n")
+            elif name == "identity-llc-15":
+                return stage_result(stdout="LLVM version 15.0.7\n")
             elif name == "lower-raw-development":
                 Path(command[-1]).write_bytes(elf_llvm_function_object_bytes(functions=1))
             return stage_result()
@@ -626,22 +627,22 @@ class LinuxCodegenToolTests(unittest.TestCase):
         self.assertFalse(Path(str(self.proof.build / "raw-development") + ".sections.s").exists())
         self.assertEqual(artifact, self.proof.build / "raw-development")
         self.proof.receipt["stages"] = [
-            dict(stage_result(), name="identity-llc-14", command=[str(self.tool.resolve()), "--version"]),
+            dict(stage_result(), name="identity-llc-15", command=[str(self.tool.resolve()), "--version"]),
             dict(stage_result(), name="lower-raw-development", command=commands["lower-raw-development"])]
         self.proof.write()
         review = runner.receipt_review(self.proof.export / "receipt.json")
         self.assertEqual(review["floor_codegen_tool"], self.proof.receipt["floor_codegen_tool"])
-        self.assertEqual(review["tools"]["llc_14"], self.proof.receipt["tools"]["llc_14"])
+        self.assertEqual(review["tools"]["llc_15"], self.proof.receipt["tools"]["llc_15"])
         self.assertEqual(review["stages"][0]["command"], [str(self.tool.resolve()), "--version"])
         self.assertEqual(review["stages"][1]["command"], commands["lower-raw-development"])
         self.assertEqual(review["artifacts"]["raw-development"]["function_sections"]["lowering_command"],
                          commands["lower-raw-development"])
 
-    def test_floor_codegen_uses_checked_llvm14_and_matches_optimization_mode(self):
-        versions = iter(("Debian LLVM version 14.0.6\n",))
+    def test_floor_codegen_uses_compiler_matching_llvm15_and_matches_optimization_mode(self):
+        versions = iter(("Debian LLVM version 15.0.7\n",))
 
         def stage(name, command, **options):
-            self.assertEqual(name, "identity-llc-14")
+            self.assertEqual(name, "identity-llc-15")
             self.assertEqual(command, [str(self.tool.resolve()), "--version"])
             self.assertEqual(options["timeout"], 20)
             return stage_result(stdout=next(versions))
@@ -650,23 +651,24 @@ class LinuxCodegenToolTests(unittest.TestCase):
                 mock.patch.object(self.proof, "stage", side_effect=stage):
             dev = self.proof.llvm_codegen_command("module.ll", "dev.o", "aarch64-unknown-linux-gnu", "development")
             release = self.proof.llvm_codegen_command("module.ll", "release.o", "aarch64-unknown-linux-gnu", "release")
-        self.assertEqual(dev, [str(self.tool.resolve()), "-opaque-pointers", "-filetype=obj", "-function-sections", "-data-sections",
-                               "-O=0", "-mtriple=aarch64-unknown-linux-gnu", "module.ll", "-o", "dev.o"])
+        self.assertEqual(dev, [str(self.tool.resolve()), "-opaque-pointers", "-filetype=obj",
+                               "-function-sections", "-data-sections", "-O=0",
+                               "-mtriple=aarch64-unknown-linux-gnu", "module.ll", "-o", "dev.o"])
         self.assertEqual(release[5], "-O=3")
-        self.assertEqual(self.proof.receipt["tools"]["llc_14"], {
+        self.assertEqual(self.proof.receipt["tools"]["llc_15"], {
             "path": str(self.tool.resolve()), "sha256": hashlib.sha256(self.tool.read_bytes()).hexdigest()})
-        self.assertEqual(self.proof.receipt["floor_codegen_tool"]["version"], "14.0.6")
+        self.assertEqual(self.proof.receipt["floor_codegen_tool"]["version"], "15.0.7")
         self.assertEqual(self.proof.receipt["floor_codegen_tool"]["options"],
                          ["-opaque-pointers", "-function-sections", "-data-sections"])
         self.assertEqual(self.proof.llvm_llc, str(self.tool.resolve()))
 
-    def test_floor_requires_llvm14_and_current_release_does_not_select_llc(self):
+    def test_floor_requires_compiler_matching_llvm15_and_current_release_does_not_select_llc(self):
         with mock.patch.object(runner.shutil, "which", return_value=None):
-            with self.assertRaisesRegex(runner.ProofError, "requires the LLVM 14 llc"):
+            with self.assertRaisesRegex(runner.ProofError, "requires llc-15 matching its LLVM IR producer"):
                 self.proof.llvm_codegen_command("module.ll", "output.o", "x86_64-unknown-linux-gnu", "development")
         with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
-                mock.patch.object(self.proof, "stage", return_value=stage_result(stdout="LLVM version 15.0.7\n")):
-            with self.assertRaisesRegex(runner.ProofError, "major version 14"):
+                mock.patch.object(self.proof, "stage", return_value=stage_result(stdout="LLVM version 16.0.0\n")):
+            with self.assertRaisesRegex(runner.ProofError, "compiler LLVM major 15"):
                 self.proof.llvm_codegen_command("module.ll", "output.o", "x86_64-unknown-linux-gnu", "development")
         self.proof.version = "1.22.2"
         with mock.patch.object(runner.shutil, "which") as which:

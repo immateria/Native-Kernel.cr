@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/nk-linux-setup.log"
-          sudo apt-get install -y gcc g++ make git binutils pkg-config libgc-dev libevent-dev libgmp-dev libssl-dev libpcre3-dev libpcre2-dev llvm-14 llvm-14-dev 2>&1 | tee -a "$RUNNER_TEMP/nk-linux-setup.log"
+          sudo apt-get install -y gcc g++ make git binutils pkg-config libgc-dev libevent-dev libgmp-dev libssl-dev libpcre3-dev libpcre2-dev llvm-15 llvm-15-dev 2>&1 | tee -a "$RUNNER_TEMP/nk-linux-setup.log"
       - name: Install exact official compiler or native bootstrap
         id: compiler-install
         timeout-minutes: 8

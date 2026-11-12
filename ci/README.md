@@ -147,15 +147,15 @@ reference trees). Interrupted setup gets an explicit incomplete receipt.
 
 Linux 1.10.0's official release has no ARM64 tarball. That cell installs the
 native official 1.22.2 bootstrap, then builds/installs official source commit
-`9c011d77d660a5a7441370dce9e101b3ca094d8b` with LLVM 14 outside the checkout.
+`9c011d77d660a5a7441370dce9e101b3ca094d8b` with LLVM 15 outside the checkout.
 The bootstrap script retains compiler/source hashes. It must actually produce
 and run native 1.10.0 before the driver will accept the cell. A bootstrap error
 is a failed/incomplete cell, not a substituted compiler or successful skip.
 The 1.10.0 assembly printer emits escaped quoted local symbols rejected by
 both GNU `as` and LLVM MC. Floor artifacts are therefore lowered directly from
-the same audited, unmodified LLVM IR through matching LLVM 14 `llc`, which
+the same audited, unmodified LLVM IR through matching LLVM 15 `llc`, which
 writes an ELF object with per-function/data sections. Its version and binary
-hash are recorded and rechecked. LLVM 14 is explicitly run with
+hash are recorded and rechecked. LLVM 15 is explicitly run with
 `-opaque-pointers`, which this compiler's IR requires. The 1.22.2 path keeps the
 system C driver's assembler and layout-only section insertion. The floor path
 leaves emitted assembly, symbols, and LLVM IR unmodified and does not feed the
@@ -218,8 +218,11 @@ runner requires one ELF text section per emitted function for O0 garbage
 collection. The 1.22.2 path inserts only section/alignment directives into the
 emitted assembly and preserves every original line; the 1.10.0 floor path avoids
 its malformed escaped-symbol assembly printer and lowers the same audited IR
-directly with hash-checked LLVM 14 `llc -function-sections -data-sections`.
-That tool's binary/version, optimization level, exact command and one-function
+directly with hash-checked LLVM 15 `llc -opaque-pointers -function-sections
+-data-sections`. The floor compiler is required to report LLVM 15, matching
+the LLVM major that parsed and produced its IR; the ARM64 bootstrap uses the
+same LLVM 15 package as the official x86_64 release. That tool's binary/version,
+optimization level, exact command and one-function
 ELF symbol/section roster are recorded and rechecked. Neither path removes
 reachable IR or grants extra imports/assembly admission. Raw clone/exec occurs only in
 unmanaged disposable fixtures. Exclusive child cleanup and driver subreaper
