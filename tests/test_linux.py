@@ -617,7 +617,7 @@ class LinuxCodegenToolTests(unittest.TestCase):
         self.assertIn("audit-raw-development", commands)
         self.assertIn("lower-raw-development", commands)
         self.assertNotIn("assemble-raw-development", commands)
-        self.assertEqual(commands["lower-raw-development"][1:5], ["-filetype=obj", "-function-sections", "-data-sections", "-O=0"])
+        self.assertEqual(commands["lower-raw-development"][1:6], ["-opaque-pointers", "-filetype=obj", "-function-sections", "-data-sections", "-O=0"])
         self.assertTrue(record["object_sections"]["all_sections_validated"])
         self.assertEqual(record["object_sections"]["function_sections"], 1)
         self.assertEqual(record["function_sections"]["llvm_ir_sha256"], record["llvm_sha256"])
@@ -650,12 +650,14 @@ class LinuxCodegenToolTests(unittest.TestCase):
                 mock.patch.object(self.proof, "stage", side_effect=stage):
             dev = self.proof.llvm_codegen_command("module.ll", "dev.o", "aarch64-unknown-linux-gnu", "development")
             release = self.proof.llvm_codegen_command("module.ll", "release.o", "aarch64-unknown-linux-gnu", "release")
-        self.assertEqual(dev, [str(self.tool.resolve()), "-filetype=obj", "-function-sections", "-data-sections",
+        self.assertEqual(dev, [str(self.tool.resolve()), "-opaque-pointers", "-filetype=obj", "-function-sections", "-data-sections",
                                "-O=0", "-mtriple=aarch64-unknown-linux-gnu", "module.ll", "-o", "dev.o"])
-        self.assertEqual(release[4], "-O=3")
+        self.assertEqual(release[5], "-O=3")
         self.assertEqual(self.proof.receipt["tools"]["llc_14"], {
             "path": str(self.tool.resolve()), "sha256": hashlib.sha256(self.tool.read_bytes()).hexdigest()})
         self.assertEqual(self.proof.receipt["floor_codegen_tool"]["version"], "14.0.6")
+        self.assertEqual(self.proof.receipt["floor_codegen_tool"]["options"],
+                         ["-opaque-pointers", "-function-sections", "-data-sections"])
         self.assertEqual(self.proof.llvm_llc, str(self.tool.resolve()))
 
     def test_floor_requires_llvm14_and_current_release_does_not_select_llc(self):

@@ -550,7 +550,7 @@ class Runner:
         elf_identity(start, self.architecture, executable=False)
         self.receipt["startup"]["object_sha256"] = common.sha256_file(start)
         c_object, c_program = self.build / "start-check.o", self.build / "start-check"
-        self.stage("compile-startup-oracle", self.cc + ["-c", "-ffreestanding", "-fno-stack-protector", "-fno-pie", "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra", "-Werror", "spec/native/linux/start_check.c", "-o", str(c_object)])
+        self.stage("compile-startup-oracle", self.cc + ["-c", "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pie", "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra", "-Werror", "spec/native/linux/start_check.c", "-o", str(c_object)])
         self.link("startup-oracle", c_object, c_program)
         c_elf = self.inspect("startup-oracle", c_program)
         artifact = self.artifact("startup-oracle", c_program, obj=c_object)
@@ -709,11 +709,11 @@ class Runner:
             self.receipt["floor_codegen_tool"] = {
                 "name": "llc-14", "path": path, "sha256": common.sha256_file(path), "version": match[1],
                 "operation": "Lower the exact audited compiler LLVM IR to ELF object sections without parsing emitted assembly",
-                "options": ["-function-sections", "-data-sections"],
+                "options": ["-opaque-pointers", "-function-sections", "-data-sections"],
                 "optimization_mapping": {"development": "-O=0 (Crystal CodeGenOptLevel::None)",
                                           "release": "-O=3 (Crystal CodeGenOptLevel::Aggressive)"}}
             self.write()
-        return [self.llvm_llc, "-filetype=obj", "-function-sections", "-data-sections",
+        return [self.llvm_llc, "-opaque-pointers", "-filetype=obj", "-function-sections", "-data-sections",
                 "-O=0" if optimization == "development" else "-O=3", "-mtriple=" + triple,
                 str(ir), "-o", str(obj)]
 

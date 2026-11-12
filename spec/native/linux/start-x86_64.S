@@ -21,4 +21,22 @@ _start:
     syscall
     ud2
 .size _start, .-_start
+
+/* Freestanding C ABI byte-fill used by LLVM's target lowering. */
+.section .text.memset,"ax",@progbits
+.p2align 4
+.global memset
+.type memset,@function
+memset:
+    mov %rdi, %rax                 /* return the original destination */
+    test %rdx, %rdx
+    jz .Lmemset_done
+.Lmemset_loop:
+    movb %sil, (%rdi)
+    inc %rdi
+    dec %rdx
+    jnz .Lmemset_loop
+.Lmemset_done:
+    ret
+.size memset, .-memset
 .section .note.GNU-stack,"",@progbits

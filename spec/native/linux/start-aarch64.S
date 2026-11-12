@@ -20,4 +20,22 @@ _start:
     svc #0
     brk #0
 .size _start, .-_start
+
+/* Freestanding C ABI byte-fill used by LLVM's target lowering. */
+.section .text.memset,"ax",%progbits
+.p2align 2
+.global memset
+.type memset,%function
+memset:
+    mov x3, x0                     /* return the original destination */
+    uxtb w1, w1
+    cbz x2, .Lmemset_done
+.Lmemset_loop:
+    strb w1, [x0], #1
+    subs x2, x2, #1
+    b.ne .Lmemset_loop
+.Lmemset_done:
+    mov x0, x3
+    ret
+.size memset, .-memset
 .section .note.GNU-stack,"",%progbits
