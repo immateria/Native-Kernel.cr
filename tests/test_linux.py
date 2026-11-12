@@ -708,6 +708,21 @@ class LinuxReceiptReviewTests(unittest.TestCase):
         self.assertEqual(review["stages"][-1]["stderr_tail"], "exact failure")
         self.assertEqual(review["stages"][-1]["command"], receipt["stages"][-1]["command"])
 
+    def test_failed_stage_review_keeps_bounded_head_and_diagnostic_lines(self):
+        self.fixture()
+        stage = dict(stage_result(exit_code=1, stdout="assembler startup\n" + "noise\n" * 500,
+                                  stderr="warning: quoted symbol\nerror: fatal assembler detail\nafter error\n"),
+                     name="assemble-raw-development")
+        self.proof.receipt["stages"].append(stage)
+        self.proof.write()
+        review = runner.receipt_review(self.path)
+        failed = review["stages"][-1]
+        self.assertIn("assembler startup", failed["stdout_head"])
+        self.assertEqual(failed["stderr_error_lines"], ["error: fatal assembler detail", "after error"])
+        self.assertEqual(failed["stderr_full"], stage["stderr"])
+        self.assertLessEqual(len(failed["stdout_head"]), 1024)
+        self.assertLessEqual(len(failed["stderr_head"]), 1024)
+
     def test_checks_notices_are_bounded_complete_numbered_sha_bound_payloads(self):
         self.fixture()
         self.proof.receipt["reason"] = ("literal %0A plus newline\n::error::not a workflow command" +

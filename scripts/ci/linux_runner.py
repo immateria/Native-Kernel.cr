@@ -837,6 +837,7 @@ def receipt_review(path):
     compiler.pop("environment", None)
     review["compiler"] = compiler
     review["stages"] = []
+    diagnostic_stage_emitted = False
     for stage in receipt["stages"]:
         record = {key: stage.get(key) for key in ("name", "status", "exit_code", "output_truncated", "expected_rejection")}
         if stage["name"].startswith("compile-") or stage["name"] == "format":
@@ -844,7 +845,16 @@ def receipt_review(path):
         if stage["name"].startswith("imports-"):
             record.update(stdout=stage["stdout"], stderr=stage["stderr"])
         if stage["status"] != "passed":
-            record.update(stdout_tail=stage["stdout"][-2048:], stderr_tail=stage["stderr"][-2048:])
+            record.update(stdout_tail=stage["stdout"][-1024:], stderr_tail=stage["stderr"][-1024:])
+            if not diagnostic_stage_emitted:
+                record.update(stdout_head=stage["stdout"][:1024], stderr_head=stage["stderr"][:1024],
+                              stdout_error_lines=[line[:256] for line in stage["stdout"].splitlines()
+                                                  if re.search(r"(?:error|fatal|undefined reference|cannot|failed)", line, re.I)][-4:],
+                              stderr_error_lines=[line[:256] for line in stage["stderr"].splitlines()
+                                                  if re.search(r"(?:error|fatal|undefined reference|cannot|failed)", line, re.I)][-4:])
+                if len(json.dumps(stage["stderr"], ensure_ascii=True)) <= 8192:
+                    record["stderr_full"] = stage["stderr"]
+                diagnostic_stage_emitted = True
         review["stages"].append(record)
     review["artifacts"] = {}
     for name, artifact in receipt["artifacts"].items():
