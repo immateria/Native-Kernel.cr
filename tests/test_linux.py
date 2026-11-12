@@ -61,6 +61,46 @@ def elf_object_bytes(*, architecture="x86_64", functions=2):
     return data
 
 
+def elf_llvm_function_object_bytes(*, architecture="x86_64", functions=2):
+    code = b"\xc3" if architecture == "x86_64" else b"\xc0\x03\x5f\xd6"
+    section_labels = [b"", b".shstrtab"] + [(".text.fn" + str(i)).encode() for i in range(functions)] + [b".symtab", b".strtab"]
+    shstrtab, section_name_offsets = bytearray(b"\0"), {}
+    for label in section_labels[1:]:
+        section_name_offsets[label] = len(shstrtab)
+        shstrtab.extend(label + b"\0")
+    strtab, symbols = bytearray(b"\0"), [bytes(24)]
+    for index in range(functions):
+        name = ("fn" + str(index)).encode()
+        name_offset = len(strtab)
+        strtab.extend(name + b"\0")
+        symbols.append(struct.pack("<IBBHQQ", name_offset, 0x12, 0, 2 + index, 0, len(code)))
+    symtab = b"".join(symbols)
+    payloads = {1: bytes(shstrtab), **{2 + index: code for index in range(functions)},
+                2 + functions: symtab, 3 + functions: bytes(strtab)}
+    cursor, offsets = 64, {}
+    for index in range(1, len(section_labels)):
+        alignment = 8 if index == 2 + functions else 1
+        cursor = (cursor + alignment - 1) & -alignment
+        offsets[index] = cursor
+        cursor += len(payloads[index])
+    shoff = (cursor + 7) & -8
+    data = bytearray(shoff + 64 * len(section_labels))
+    for index, payload in payloads.items():
+        data[offsets[index]:offsets[index] + len(payload)] = payload
+    ident = b"\x7fELF\x02\x01\x01" + b"\0" * 9
+    struct.pack_into("<16sHHIQQQIHHHHHH", data, 0, ident, 1, runner.ARCHITECTURES[architecture], 1,
+                     0, 0, shoff, 0, 64, 0, 0, 64, len(section_labels), 1)
+    headers = [(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+               (section_name_offsets[b".shstrtab"], 3, 0, 0, offsets[1], len(payloads[1]), 0, 0, 1, 0)]
+    headers.extend((section_name_offsets[(".text.fn" + str(i)).encode()], 1, 6, 0, offsets[2 + i], len(code), 0, 0, 16, 0)
+                   for i in range(functions))
+    headers.extend(((section_name_offsets[b".symtab"], 2, 0, 0, offsets[2 + functions], len(symtab),
+                     3 + functions, 1, 8, 24),
+                    (section_name_offsets[b".strtab"], 3, 0, 0, offsets[3 + functions], len(strtab), 0, 0, 1, 0)))
+    for index, header in enumerate(headers):
+        struct.pack_into("<IIQQQQIIQQ", data, shoff + index * 64, *header)
+    return data
+
 def proof_args(output, **overrides):
     return SimpleNamespace(**dict(dict(output=str(output), cross_target=None,
                            architecture="x86_64", cc="cc", expected_compiler="1.22.2",
@@ -497,50 +537,139 @@ class LinuxFloorPreludeTests(unittest.TestCase):
         self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
 
 
-class LinuxAssemblyToolTests(unittest.TestCase):
+class LinuxLlvmObjectSectionsTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="nk-linux-assembler-")
+        self.temp = tempfile.TemporaryDirectory(prefix="nk-linux-llc-object-")
         self.addCleanup(self.temp.cleanup)
-        self.proof = runner.Runner(proof_args(Path(self.temp.name) / "proof"))
-        self.proof.compiler, self.proof.version = "fixture-compiler", "1.10.0"
-        self.tool = Path(self.temp.name) / "llvm-mc-14"
-        self.tool.write_bytes(b"fixture LLVM MC 14 executable")
+        self.path = Path(self.temp.name) / "fixture.o"
 
-    def test_floor_uses_versioned_hash_recorded_llvm_mc_with_emitted_triple(self):
+    def test_direct_llvm_object_needs_one_defined_function_per_executable_section(self):
+        for architecture in runner.ARCHITECTURES:
+            with self.subTest(architecture=architecture):
+                self.path.write_bytes(elf_llvm_function_object_bytes(architecture=architecture, functions=3))
+                record = runner.elf_object_sections(self.path, architecture, 3, llvm_function_sections=True)
+                self.assertEqual(record["function_sections"], 3)
+                self.assertEqual(record["function_symbols"], 3)
+                self.assertEqual(record["function_symbols_sha256"], hashlib.sha256(b"fn0\0fn1\0fn2").hexdigest())
+                self.assertTrue(record["all_sections_validated"])
+
+    def test_incomplete_or_misbound_llvm_function_section_roster_fails_closed(self):
+        self.path.write_bytes(elf_llvm_function_object_bytes(functions=2))
+        with self.assertRaisesRegex(runner.ProofError, "per-function text-section roster"):
+            runner.elf_object_sections(self.path, "x86_64", 3, llvm_function_sections=True)
+        data = elf_llvm_function_object_bytes(functions=2)
+        shoff = struct.unpack_from("<Q", data, 40)[0]
+        symtab_offset = struct.unpack_from("<Q", data, shoff + 4 * 64 + 24)[0]
+        struct.pack_into("<H", data, symtab_offset + 24 + 6, 1)  # Point fn0 at .shstrtab.
+        self.path.write_bytes(data)
+        with self.assertRaisesRegex(runner.ProofError, "outside a dedicated executable text section"):
+            runner.elf_object_sections(self.path, "x86_64", 2, llvm_function_sections=True)
+        data = elf_llvm_function_object_bytes(functions=2)
+        shoff = struct.unpack_from("<Q", data, 40)[0]
+        symtab_offset = struct.unpack_from("<Q", data, shoff + 4 * 64 + 24)[0]
+        struct.pack_into("<Q", data, symtab_offset + 24 + 16, 0)  # Empty STT_FUNC extent.
+        self.path.write_bytes(data)
+        with self.assertRaisesRegex(runner.ProofError, "invalid extent in its text section"):
+            runner.elf_object_sections(self.path, "x86_64", 2, llvm_function_sections=True)
+
+
+class LinuxCodegenToolTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="nk-linux-llc-")
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.proof = runner.Runner(proof_args(self.directory / "proof", expected_compiler="1.10.0"))
+        self.proof.compiler, self.proof.version = "fixture-compiler", "1.10.0"
+        self.tool = self.directory / "llc-14"
+        self.tool.write_bytes(b"fixture LLVM llc 14 executable")
+
+    def test_floor_build_lowers_audited_ir_directly_and_retains_original_assembly(self):
+        stdlib = self.directory / "selected stdlib"
+        (stdlib / "crystal").mkdir(parents=True)
+        (stdlib / "prelude.cr").write_bytes(LinuxFloorPreludeTests.ORIGINAL)
+        (stdlib / "crystal/main.cr").write_bytes(LinuxFloorPreludeTests.MAIN_SOURCE)
+        environment = "CRYSTAL_PATH=" + shlex.quote(str(stdlib))
+        self.proof.receipt["compiler"] = {"stdlib_sha256": runner.crystal_stdlib_sources(environment, self.proof.root)}
+        self.proof.prepare_unmanaged_entry(environment)
+        commands = {}
+
         def stage(name, command, **options):
-            self.assertEqual(name, "identity-llvm-mc-14")
+            commands[name] = command
+            if name == "compile-raw-development":
+                output = Path(command[-1])
+                Path(str(output) + ".ll").write_text('target triple = "x86_64-unknown-linux-gnu"\n')
+                Path(str(output) + ".s").write_text(".type main,@function\nmain:\nret\n.size main,.-main\n")
+                Path(str(output) + ".o").write_bytes(elf_object_bytes(functions=1))
+            elif name == "identity-llc-14":
+                return stage_result(stdout="LLVM version 14.0.6\n")
+            elif name == "lower-raw-development":
+                Path(command[-1]).write_bytes(elf_llvm_function_object_bytes(functions=1))
+            return stage_result()
+
+        def link(name, obj, program):
+            program.write_bytes(elf_bytes())
+
+        with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
+                mock.patch.object(self.proof, "stage", side_effect=stage), \
+                mock.patch.object(self.proof, "link", side_effect=link), \
+                mock.patch.object(self.proof, "inspect", return_value={"type": 2}):
+            artifact, record = self.proof.build_probe("raw", "development", "fixture-auditor")
+        self.assertIn("audit-raw-development", commands)
+        self.assertIn("lower-raw-development", commands)
+        self.assertNotIn("assemble-raw-development", commands)
+        self.assertEqual(commands["lower-raw-development"][1:5], ["-filetype=obj", "-function-sections", "-data-sections", "-O=0"])
+        self.assertTrue(record["object_sections"]["all_sections_validated"])
+        self.assertEqual(record["object_sections"]["function_sections"], 1)
+        self.assertEqual(record["function_sections"]["llvm_ir_sha256"], record["llvm_sha256"])
+        self.assertIn("without rewriting it or passing it to an assembler", record["function_sections"]["operation"])
+        self.assertTrue((self.proof.export / "raw-development.s.gz").is_file())
+        self.assertFalse(Path(str(self.proof.build / "raw-development") + ".sections.s").exists())
+        self.assertEqual(artifact, self.proof.build / "raw-development")
+        self.proof.receipt["stages"] = [
+            dict(stage_result(), name="identity-llc-14", command=[str(self.tool.resolve()), "--version"]),
+            dict(stage_result(), name="lower-raw-development", command=commands["lower-raw-development"])]
+        self.proof.write()
+        review = runner.receipt_review(self.proof.export / "receipt.json")
+        self.assertEqual(review["floor_codegen_tool"], self.proof.receipt["floor_codegen_tool"])
+        self.assertEqual(review["tools"]["llc_14"], self.proof.receipt["tools"]["llc_14"])
+        self.assertEqual(review["stages"][0]["command"], [str(self.tool.resolve()), "--version"])
+        self.assertEqual(review["stages"][1]["command"], commands["lower-raw-development"])
+        self.assertEqual(review["artifacts"]["raw-development"]["function_sections"]["lowering_command"],
+                         commands["lower-raw-development"])
+
+    def test_floor_codegen_uses_checked_llvm14_and_matches_optimization_mode(self):
+        versions = iter(("Debian LLVM version 14.0.6\n",))
+
+        def stage(name, command, **options):
+            self.assertEqual(name, "identity-llc-14")
             self.assertEqual(command, [str(self.tool.resolve()), "--version"])
             self.assertEqual(options["timeout"], 20)
-            return stage_result(stdout="Debian LLVM version 14.0.6\\n")
+            return stage_result(stdout=next(versions))
 
         with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
                 mock.patch.object(self.proof, "stage", side_effect=stage):
-            command = self.proof.assembly_command("floor.sections.s", "floor.sections.o", "aarch64-unknown-linux-gnu")
-        self.assertEqual(command, [str(self.tool.resolve()), "-filetype=obj", "-triple=aarch64-unknown-linux-gnu",
-                                   "floor.sections.s", "-o", "floor.sections.o"])
-        self.assertEqual(self.proof.receipt["tools"]["llvm_mc_14"], {
+            dev = self.proof.llvm_codegen_command("module.ll", "dev.o", "aarch64-unknown-linux-gnu", "development")
+            release = self.proof.llvm_codegen_command("module.ll", "release.o", "aarch64-unknown-linux-gnu", "release")
+        self.assertEqual(dev, [str(self.tool.resolve()), "-filetype=obj", "-function-sections", "-data-sections",
+                               "-O=0", "-mtriple=aarch64-unknown-linux-gnu", "module.ll", "-o", "dev.o"])
+        self.assertEqual(release[4], "-O=3")
+        self.assertEqual(self.proof.receipt["tools"]["llc_14"], {
             "path": str(self.tool.resolve()), "sha256": hashlib.sha256(self.tool.read_bytes()).hexdigest()})
-        self.assertEqual(self.proof.receipt["assembly_tool"]["version"], "14.0.6")
-        self.assertEqual(self.proof.llvm_mc, str(self.tool.resolve()))
-        self.proof.write()
-        review = runner.receipt_review(self.proof.export / "receipt.json")
-        self.assertEqual(review["assembly_tool"], self.proof.receipt["assembly_tool"])
+        self.assertEqual(self.proof.receipt["floor_codegen_tool"]["version"], "14.0.6")
+        self.assertEqual(self.proof.llvm_llc, str(self.tool.resolve()))
 
-    def test_floor_requires_llvm_14_and_later_release_keeps_cc_assembler(self):
+    def test_floor_requires_llvm14_and_current_release_does_not_select_llc(self):
         with mock.patch.object(runner.shutil, "which", return_value=None):
-            with self.assertRaisesRegex(runner.ProofError, "requires the matching LLVM 14"):
-                self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+            with self.assertRaisesRegex(runner.ProofError, "requires the LLVM 14 llc"):
+                self.proof.llvm_codegen_command("module.ll", "output.o", "x86_64-unknown-linux-gnu", "development")
         with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
-                mock.patch.object(self.proof, "stage", return_value=stage_result(stdout="LLVM version 15.0.7\\n")):
+                mock.patch.object(self.proof, "stage", return_value=stage_result(stdout="LLVM version 15.0.7\n")):
             with self.assertRaisesRegex(runner.ProofError, "major version 14"):
-                self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+                self.proof.llvm_codegen_command("module.ll", "output.o", "x86_64-unknown-linux-gnu", "development")
         self.proof.version = "1.22.2"
         with mock.patch.object(runner.shutil, "which") as which:
-            command = self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+            self.assertIsNone(self.proof.llvm_codegen_command("module.ll", "output.o", "x86_64-unknown-linux-gnu", "development"))
         which.assert_not_called()
-        self.assertEqual(command, ["cc", "-c", "-x", "assembler", "input.s", "-o", "output.o"])
-
-
 class LinuxFunctionSectionsTests(unittest.TestCase):
     def test_preserves_every_original_assembly_line_and_instruction(self):
         for architecture, marker in (("x86_64", "@"), ("aarch64", "%")):

@@ -151,11 +151,14 @@ native official 1.22.2 bootstrap, then builds/installs official source commit
 The bootstrap script retains compiler/source hashes. It must actually produce
 and run native 1.10.0 before the driver will accept the cell. A bootstrap error
 is a failed/incomplete cell, not a substituted compiler or successful skip.
-The 1.10.0 assembly printer emits escaped quoted local symbols that Ubuntu's
-GNU assembler misparses; floor artifacts are therefore assembled by matching
-`llvm-mc-14`. Its version and binary hash are recorded and rechecked. The
-1.22.2 path keeps the system C driver's assembler. Both paths assemble the
-same layout-only text; no emitted instruction or symbol is rewritten.
+The 1.10.0 assembly printer emits escaped quoted local symbols rejected by
+both GNU `as` and LLVM MC. Floor artifacts are therefore lowered directly from
+the same audited, unmodified LLVM IR through matching LLVM 14 `llc`, which
+writes an ELF object with per-function/data sections. Its version and binary
+hash are recorded and rechecked. The 1.22.2 path keeps the system C driver's
+assembler and layout-only section insertion. The floor path leaves emitted
+assembly, symbols, and LLVM IR unmodified and does not feed the assembly to an
+assembler.
 
 For unmanaged 1.10.0 builds, the driver derives an external build-local prelude
 from the first `prelude.cr` selected by that exact compiler's `CRYSTAL_PATH`.
@@ -206,10 +209,14 @@ in both modes; every public method is mapped in `ci/linux.json`. Static ELF
 entry/import/dependency checks, independent installed-UAPI C assertions,
 negative LLVM fixtures, unsupported direct requires, exact output markers and
 source hashes before/after are mandatory. A separate Linux-spec example-count
-gate prevents portable-only spec success. After auditing unmodified LLVM, a
-layout-only assembly step inserts per-function ELF sections/alignment for O0
-garbage collection; it preserves every original assembly line and retains both
-compressed texts/hashes and the reassembled object identity. It never removes
+gate prevents portable-only spec success. After auditing unmodified LLVM, the
+runner requires one ELF text section per emitted function for O0 garbage
+collection. The 1.22.2 path inserts only section/alignment directives into the
+emitted assembly and preserves every original line; the 1.10.0 floor path avoids
+its malformed escaped-symbol assembly printer and lowers the same audited IR
+directly with hash-checked LLVM 14 `llc -function-sections -data-sections`.
+That tool's binary/version, optimization level, exact command and one-function
+ELF symbol/section roster are recorded and rechecked. Neither path removes
 reachable IR or grants extra imports/assembly admission. Raw clone/exec occurs only in
 unmanaged disposable fixtures. Exclusive child cleanup and driver subreaper
 containment are bounded; any adopted child fails the case. `mechanisms-passed`

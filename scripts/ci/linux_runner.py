@@ -91,8 +91,8 @@ def elf_identity(path, architecture, *, executable=True):
             "interpreter": False, "dynamic_segment": False, "initializers": False}
 
 
-def elf_object_sections(path, architecture, function_count):
-    """Validate every transformed ELF section without printing an unbounded table."""
+def elf_object_sections(path, architecture, function_count, *, llvm_function_sections=False):
+    """Validate every object section and, for llc output, its one-function mapping."""
     identity = elf_identity(path, architecture, executable=False)
     data = Path(path).read_bytes()
     shoff = struct.unpack_from("<Q", data, 40)[0]
@@ -104,9 +104,10 @@ def elf_object_sections(path, architecture, function_count):
     if names_header[1] != 3 or not name_size or name_offset + name_size > len(data):
         raise ProofError("Invalid ELF object section names")
     names = data[name_offset:name_offset + name_size]
-    functions = set()
+    sections, function_sections, executable_sections = [], {}, []
     for index in range(shnum):
-        name, kind, flags, address, offset, size, link, info, alignment, entry_size = struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * shsize)
+        fields = struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * shsize)
+        name, kind, flags, address, offset, size, link, info, alignment, entry_size = fields
         end = names.find(b"\0", name)
         if name >= len(names) or end == -1:
             raise ProofError("Invalid ELF object section name")
@@ -117,14 +118,70 @@ def elf_object_sections(path, architecture, function_count):
             raise ProofError("Writable executable ELF object section")
         if size and (kind in (14, 15, 16) or label in (b".init_array", b".fini_array", b".preinit_array", b".ctors", b".dtors")):
             raise ProofError("ELF object contains initialization/finalization arrays")
-        if label.startswith(b".text.nk."):
-            if label in functions or kind != 1 or flags & 7 != 6:
+        section = {"index": index, "name": label, "kind": kind, "flags": flags, "address": address,
+                   "offset": offset, "size": size, "link": link, "info": info, "entry_size": entry_size}
+        sections.append(section)
+        if flags & 4 and size:
+            executable_sections.append(section)
+        if llvm_function_sections and label.startswith(b".text."):
+            if label in function_sections or kind != 1 or flags & 7 != 6 or size == 0:
+                raise ProofError("Invalid or duplicate LLVM per-function text section")
+            function_sections[label] = section
+        elif not llvm_function_sections and label.startswith(b".text.nk."):
+            if label in function_sections or kind != 1 or flags & 7 != 6:
                 raise ProofError("Invalid or duplicate transformed function section")
-            functions.add(label)
-    if functions != {(".text.nk." + str(index)).encode() for index in range(function_count)}:
-        raise ProofError("Transformed ELF function-section roster differs from emitted assembly")
-    return dict(identity, sections=shnum, function_sections=len(functions),
-                all_sections_validated=True, initializers=False, writable_executable_sections=False)
+            function_sections[label] = section
+    if not llvm_function_sections:
+        expected = {(".text.nk." + str(index)).encode() for index in range(function_count)}
+        if set(function_sections) != expected:
+            raise ProofError("Transformed ELF function-section roster differs from emitted assembly")
+        return dict(identity, sections=shnum, function_sections=len(function_sections),
+                    all_sections_validated=True, initializers=False, writable_executable_sections=False)
+
+    # Direct LLVM IR-to-object lowering avoids the floor assembly printer's
+    # malformed escaped quoted local symbols. Require the output's complete
+    # STT_FUNC roster to correspond one-for-one with executable .text.<symbol>
+    # sections, as requested with -function-sections. No instruction text or IR
+    # is repaired or filtered, and no permissive assembler parser is involved.
+    if len(function_sections) != function_count or any(not section["name"].startswith(b".text.") for section in executable_sections):
+        raise ProofError("LLVM object does not have the complete per-function text-section roster")
+    symtabs = [section for section in sections if section["kind"] == 2]
+    if len(symtabs) != 1:
+        raise ProofError("LLVM object must have exactly one ELF symbol table")
+    symtab = symtabs[0]
+    symbol_count = symtab["size"] // 24
+    if (symtab["entry_size"] != 24 or symtab["size"] % 24 or symtab["link"] >= len(sections) or
+            sections[symtab["link"]]["kind"] != 3 or not 1 <= symtab["info"] <= symbol_count):
+        raise ProofError("Malformed LLVM object symbol table/string table")
+    string_section = sections[symtab["link"]]
+    strings = data[string_section["offset"]:string_section["offset"] + string_section["size"]]
+    symbols_by_section, function_symbols = {}, []
+    for offset in range(symtab["offset"], symtab["offset"] + symtab["size"], 24):
+        name_offset, info, other, section_index, value, size = struct.unpack_from("<IBBHQQ", data, offset)
+        if info & 0xF != 2 or section_index == 0:  # STT_FUNC, defined in this object.
+            continue
+        end = strings.find(b"\0", name_offset)
+        if name_offset >= len(strings) or end == -1 or end == name_offset:
+            raise ProofError("Malformed or unnamed defined LLVM function symbol")
+        symbol = strings[name_offset:end]
+        if section_index >= len(sections):
+            raise ProofError("LLVM function symbol has an invalid section index")
+        section = sections[section_index]
+        if section["name"] not in function_sections or not section["flags"] & 4:
+            raise ProofError("Defined LLVM function is outside a dedicated executable text section")
+        if size == 0 or value > section["size"] or size > section["size"] - value:
+            raise ProofError("LLVM function symbol has an invalid extent in its text section")
+        function_symbols.append(symbol)
+        symbols_by_section.setdefault(section_index, []).append(symbol)
+    if (len(function_symbols) != function_count or len(set(function_symbols)) != function_count or
+            set(symbols_by_section) != {section["index"] for section in function_sections.values()} or
+            any(len(symbols) != 1 for symbols in symbols_by_section.values())):
+        raise ProofError("LLVM function symbols do not map one-to-one to emitted function sections")
+    digest = lambda values: hashlib.sha256(b"\0".join(sorted(values))).hexdigest()
+    return dict(identity, sections=shnum, function_sections=len(function_sections),
+                function_symbols=len(function_symbols), function_symbols_sha256=digest(function_symbols),
+                function_sections_sha256=digest(list(function_sections)), all_sections_validated=True,
+                initializers=False, writable_executable_sections=False)
 
 
 def crystal_search_directories(environment, root):
@@ -392,7 +449,8 @@ class Runner:
         self.cc = shlex.split(args.cc)
         if not self.cc:
             raise ProofError("Select a nonempty C compiler command")
-        self.llvm_mc = None
+        self.llvm_llc = None
+        self.llvm_llc_version = None
         self.receipt = {
             "schema": 1, "status": "incomplete", "qualification": "incomplete",
             "mode": "cross-compile-only" if self.cross else "native",
@@ -632,25 +690,32 @@ class Runner:
                 raise ProofError("Unsupported direct require did not refuse explicitly: " + name)
             result.update(status="passed", expected_rejection=True)
 
-    def assembly_command(self, sectioned, obj, triple):
+    def llvm_codegen_command(self, ir, obj, triple, optimization):
         if self.version != "1.10.0":
-            return self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)]
-        if not self.llvm_mc:
-            candidate = shutil.which("llvm-mc-14")
+            return None
+        if optimization not in ("development", "release"):
+            raise ProofError("Unknown LLVM optimization profile")
+        if not self.llvm_llc:
+            candidate = shutil.which("llc-14")
             if not candidate or not Path(candidate).is_file():
-                raise ProofError("Crystal 1.10.0 assembly requires the matching LLVM 14 integrated assembler")
+                raise ProofError("Crystal 1.10.0 codegen requires the LLVM 14 llc object writer")
             path = str(Path(candidate).resolve())
-            result = self.stage("identity-llvm-mc-14", [path, "--version"], timeout=20)
+            result = self.stage("identity-llc-14", [path, "--version"], timeout=20)
             match = re.search(r"\bLLVM version (\d+(?:\.\d+)*)", result["stdout"])
             if not match or match[1].split(".", 1)[0] != "14":
-                raise ProofError("The floor assembly tool must be LLVM MC major version 14")
-            self.llvm_mc = path
-            self.receipt.setdefault("tools", {})["llvm_mc_14"] = {"path": path, "sha256": common.sha256_file(path)}
-            self.receipt["assembly_tool"] = {"name": "llvm-mc-14", "path": path,
-                                              "version": match[1],
-                                              "reason": "The floor compiler emits escaped quoted local symbols that GNU as misparses"}
+                raise ProofError("The floor LLVM codegen tool must have major version 14")
+            self.llvm_llc, self.llvm_llc_version = path, match[1]
+            self.receipt.setdefault("tools", {})["llc_14"] = {"path": path, "sha256": common.sha256_file(path)}
+            self.receipt["floor_codegen_tool"] = {
+                "name": "llc-14", "path": path, "sha256": common.sha256_file(path), "version": match[1],
+                "operation": "Lower the exact audited compiler LLVM IR to ELF object sections without parsing emitted assembly",
+                "options": ["-function-sections", "-data-sections"],
+                "optimization_mapping": {"development": "-O=0 (Crystal CodeGenOptLevel::None)",
+                                          "release": "-O=3 (Crystal CodeGenOptLevel::Aggressive)"}}
             self.write()
-        return [self.llvm_mc, "-filetype=obj", "-triple=" + triple, str(sectioned), "-o", str(obj)]
+        return [self.llvm_llc, "-filetype=obj", "-function-sections", "-data-sections",
+                "-O=0" if optimization == "development" else "-O=3", "-mtriple=" + triple,
+                str(ir), "-o", str(obj)]
 
     def build_probe(self, fixture, optimization, auditor):
         name = fixture + "-" + optimization
@@ -678,22 +743,46 @@ class Runner:
         if not triple or not triple[1].startswith(self.architecture + "-") or "linux" not in triple[1] or "android" in triple[1]:
             raise ProofError("Emitted LLVM target differs from the selected Linux architecture")
         self.stage("audit-" + name, [str(auditor), str(ir), "linux-" + self.architecture])
+        if common.sha256_file(ir) != record["llvm_sha256"]:
+            raise ProofError("Compiler LLVM IR changed during its source-bound audit")
         elf_identity(emitted_obj, self.architecture, executable=False)
         sectioned = Path(str(artifact) + ".sections.s")
         text, functions = function_sections(assembly.read_text(), self.architecture)
-        sectioned.write_text(text)
-        section_record = {"emitted_assembly_sha256": common.sha256_file(assembly),
-                          "sectioned_assembly_sha256": common.sha256_file(sectioned), "functions": functions,
-                          "operation": "Insert only per-function ELF section/alignment directives; no original lines removed or changed"}
-        record["function_sections"] = section_record
-        self.write()
-        for suffix, path in ((".s.gz", assembly), (".sections.s.gz", sectioned)):
-            with gzip.open(self.export / (name + suffix), "wb") as stream:
-                stream.write(path.read_bytes())
         obj = Path(str(artifact) + ".sections.o")
-        self.stage("assemble-" + name, self.assembly_command(sectioned, obj, triple[1]))
-        record["object_sections"] = elf_object_sections(obj, self.architecture, len(functions))
-        common.write_json(self.export / (name + ".object-sections.json"), record["object_sections"])
+        if self.version == "1.10.0":
+            # GNU as and LLVM MC both reject escaped quoted local symbols in
+            # Crystal 1.10's printer output. Lower the audited, unmodified IR
+            # directly with matching LLVM 14's object writer instead.
+            section_record = {"emitted_assembly_sha256": common.sha256_file(assembly), "functions": functions,
+                              "llvm_ir_sha256": common.sha256_file(ir), "optimization": optimization,
+                              "operation": "Lower the exact audited LLVM IR with llc-14 -function-sections -data-sections; retain emitted assembly as evidence without rewriting it or passing it to an assembler"}
+            record["function_sections"] = section_record
+            self.write()
+            command = self.llvm_codegen_command(ir, obj, triple[1], optimization)
+            if common.sha256_file(ir) != record["llvm_sha256"]:
+                raise ProofError("Compiler LLVM IR changed after audit and before object lowering")
+            self.stage("lower-" + name, command)
+            if common.sha256_file(ir) != record["llvm_sha256"]:
+                raise ProofError("Compiler LLVM IR changed during direct object lowering")
+            object_sections = elf_object_sections(obj, self.architecture, len(functions), llvm_function_sections=True)
+            section_record["lowering_command"] = command
+            section_record["codegen_object_sha256"] = common.sha256_file(obj)
+            with gzip.open(self.export / (name + ".s.gz"), "wb") as stream:
+                stream.write(assembly.read_bytes())
+        else:
+            sectioned.write_text(text)
+            section_record = {"emitted_assembly_sha256": common.sha256_file(assembly),
+                              "sectioned_assembly_sha256": common.sha256_file(sectioned), "functions": functions,
+                              "operation": "Insert only per-function ELF section/alignment directives; no original lines removed or changed"}
+            record["function_sections"] = section_record
+            self.write()
+            for suffix, path in ((".s.gz", assembly), (".sections.s.gz", sectioned)):
+                with gzip.open(self.export / (name + suffix), "wb") as stream:
+                    stream.write(path.read_bytes())
+            self.stage("assemble-" + name, self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)])
+            object_sections = elf_object_sections(obj, self.architecture, len(functions))
+        common.write_json(self.export / (name + ".object-sections.json"), object_sections)
+        record["object_sections"] = object_sections
         self.write()
         self.stage("object-" + name, ["readelf", "-h", "-W", str(obj)])
         self.link(name, obj, artifact)
@@ -843,8 +932,8 @@ def receipt_review(path):
     serialized = Path(path).read_bytes()
     receipt = json.loads(serialized)
     fields = ("status", "qualification", "mode", "architecture", "expected_compiler", "git_head", "git_branch",
-              "host", "source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged", "tools", "tools_scope", "assembly_tool",
-              "spec_examples", "linux_spec_examples", "cases", "unproduced_artifacts", "final_adopted_children",
+              "host", "source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged", "tools", "tools_scope",
+              "floor_codegen_tool", "spec_examples", "linux_spec_examples", "cases", "unproduced_artifacts", "final_adopted_children",
               "unmanaged_entry", "limits", "reason", "workflow")
     review = {key: receipt.get(key) for key in fields}
     review.update(review_schema=1, receipt_sha256=hashlib.sha256(serialized).hexdigest(),
@@ -861,7 +950,7 @@ def receipt_review(path):
     diagnostic_stage_emitted = False
     for stage in receipt["stages"]:
         record = {key: stage.get(key) for key in ("name", "status", "exit_code", "output_truncated", "expected_rejection")}
-        if stage["name"].startswith("compile-") or stage["name"] == "format":
+        if stage["name"].startswith(("compile-", "lower-")) or stage["name"] in ("format", "identity-llc-14"):
             record["command"] = stage["command"]
         if stage["name"].startswith("imports-"):
             record.update(stdout=stage["stdout"], stderr=stage["stderr"])
