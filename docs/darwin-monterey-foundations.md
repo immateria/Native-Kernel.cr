@@ -1,7 +1,8 @@
 # Darwin 21 spawn and task-token foundations
 
-Source audit and implementation date: **2026-11-11**. This document records a
-source-derived ABI profile and build handoff, not Monterey runtime qualification.
+Source audit and implementation date: **2026-11-11**. The original checkpoint
+recorded a source-derived ABI profile and build handoff. The later native Intel
+fixture corrections and manifest-bound Monterey results are recorded below.
 It applies only to native64 x86-64 code targeting macOS 12.7.6 / build 21H1320
 / Darwin 21.6.0. The owner's reported shipping kernel is
 `xnu-8020.240.18.709.2`.
@@ -122,8 +123,9 @@ source. The audit host actually compiled it successfully on 2026-11-11 with:
 That was GCC 12.2.0 on Linux x86-64, so it demonstrates the self-contained C
 layout model, not Xcode/SDK conformance. When the spawn lane is selected, the
 handoff builder repeats the same assertion with Xcode's x86-64 C compiler and
-records `compiled` only in its external build receipt. That Apple build has
-**not** run here.
+records `compiled` only in its external build receipt. That Apple build had
+**not** run at the original source-audit checkpoint. The native Intel correction
+below records the later Xcode build and replay.
 
 ### Unmanaged spawn fixture
 
@@ -138,8 +140,8 @@ records `compiled` only in its external build receipt. That Apple build has
 | terminal result | target returns 37; parent exclusively collects `37 << 8` |
 | signal default/mask | parent installs ignored/blocked SIGUSR1; target observes default handler and unblocked bit |
 | close-on-exec | target receives the original writer FD number and requires `F_GETFD` to return EBADF; stdout FD 1 remains through explicit DUP2 |
-| working directory | CHDIR `/`; target opens relative `dev/null` |
-| null setup rejection | null syscall arguments return `EFAULT` and leave caller's PID output zero |
+| working directory | CHDIR `/`; target opens relative `dev/null` and accepts any nonnegative descriptor, including reused stdin/stderr slots closed by `CLOEXEC_DEFAULT` |
+| null path activation rejection | null syscall arguments return `EFAULT` with a positive PID copied out before the kernel's internal reap; this error-result PID grants no caller collection ownership |
 | malformed descriptor action-size | the descriptor's 8-byte `file_actions_size` is below `PSF_ACTIONS_SIZE(1)`, returns `EINVAL` before fork, and preserves sentinel PID storage |
 | malformed action count/size | a one-action byte length with count two fails the exact `PSF_ACTIONS_SIZE(count)` check before fork and preserves sentinel PID storage |
 | invalid cwd | a CHDIR action through `/dev/null/...` fails activation; the audited kernel error path internally reaps rather than granting caller collection ownership |
@@ -291,6 +293,67 @@ cleanup/release failure rather than silently replacing the original gate
 result. No path retries creation or treats a PID from a failed spawn-style
 operation as collection authority.
 
+## Native Intel fixture corrections on 2026-11-11
+
+The returned fix report describes the initial bundle from
+`9a11fc2e64c739000e9dc6aa4d33182ea700a7dd` on the native Intel Mini at
+macOS 12.7.6 / 21H1320 / Darwin 21.6.0: all 16 task-token executions passed,
+while spawn passed 20 of 28. Its success and null-arguments cases failed in
+all four compiler/optimization builds. The report identifies two fixture
+assumptions, consistent with the pinned XNU source:
+
+- The success parent returned 33 after its target exited 15 without output.
+  An instrumented unmanaged target established that CHDIR `/` succeeded and
+  opening relative `dev/null` returned descriptor 0. `CLOEXEC_DEFAULT` closes
+  stdin and stderr unless they are explicitly inherited, so a successful open
+  can reuse those slots. The target now requires a successful, nonnegative
+  descriptor and closes that exact descriptor. Its output, source-FD closure,
+  signal, argument, environment and terminal-status checks remain in force.
+- The null-arguments case returned the required `EFAULT`, with a positive PID
+  copied out during activation. The Darwin 21 kernel internally reaps this
+  failed spawn. The fixture now requires that exact error and positive copyout,
+  using the existing activation-rejection path that never collects or signals
+  an error-result PID. The returned managed spec supplied an unreadable
+  descriptor for a pre-fork copyin failure; the integrated regression uses
+  the structured pre-fork rejection described below.
+
+These corrections affect the acceptance fixtures; the syscall entry, private
+layout profiles and consumer release admission retain their existing contracts.
+
+The returned build receipt binds all 12 executable components to the corrected
+source and original Crystal 1.22.2 and 1.10.0 compiler binaries. The selected
+SDK was 13.1; the report identifies Xcode 14. Independent archive inspection
+reconciled every supplied executable hash, manifest payload, deployment-12.0
+loader profile, empty import table and signature record. All 28 spawn and 16
+task-token exact outcomes and bounded log bytes match the manifests on the
+native Intel host above. The compiled source closure differs from the original
+bundle only in `spec/native/exec.cr` and `spec/native/monterey_spawn.cr`; runtime
+primitives and auditors are unchanged.
+
+The build receipt records successful reachable-LLVM checks and IR/object hashes.
+The returned archive omits those IR/object files and build logs, so their hashes
+cannot be independently recomputed from this handoff. Its summary additionally
+reports formatting, 38 specs and both unmanaged core modes on each compiler,
+and 85 Python tests. The corresponding Mini logs, core manifests/artifacts,
+initial failure traces and instrumented diagnosis are also absent. These are
+reported auxiliary checks rather than independently reconciled evidence. The
+report describes a local core-link wrapper selecting `-Wl,-fixup_chains`, the
+same option used by the campaign builder, with the strict import auditor intact.
+
+The integrated managed regression uses fully readable descriptor/action
+buffers, but declares an eight-byte actions size below `PSF_ACTIONS_SIZE(1)`.
+The pinned Darwin 21/24/25 sources reject this with `EINVAL` before fork. A
+nonzero PID sentinel detects an erroneous overwrite. It selects the running
+kernel's admitted profile and never invokes the private syscall on another
+release. This replaces the returned unreadable-descriptor case. On macOS
+15.4.1 / 24E263, the translated x86-64 Crystal 1.22.2 spec process stalled in
+syscall handling and hit the runner's
+300-second timeout. The retained sample locates it inside the new spawn call.
+The structured case preserves pre-fork errno/output checks without requiring
+an invalid memory dereference through translation. It is outside the replay
+bundle's compiled closure; the Mini's activation `EFAULT` case is unchanged.
+Process-Control Monterey admission remains a separate gate.
+
 ## Handoff and qualification gates
 
 At Arena commit `8922b40`, only the source and C-model gates had run; that
@@ -319,12 +382,24 @@ They preserve the source/target qualification boundary.
   authority. All four local consumer profiles pass 129 examples and helper
   artifact checks with the changed dependency bytes.
 
+After the readable undersized-action regression was integrated, the complete
+Native-Kernel qualification was rerun on this same macOS 15.4.1 host. All four
+final receipts report 45 passing stages, 38 passing Crystal specs, 85 passing
+Python tests, 24 exact behavior outcomes and an unchanged source tree: Crystal
+1.22.2 and 1.10.0, each on native ARM64 and translated x86-64. The translated
+verifier needed `PKG_CONFIG_PATH` directed to the installed Intel OpenSSL 3
+metadata under `/usr/local`; without that selection, its managed verifier tried
+to link the ARM64 Homebrew library under `/opt/homebrew`. This was a local
+dependency-selection correction, not a source or auditor change.
+
 Receipts, build logs and input hashes are external in the owner's
 `arena-native-fixes-6zx6y1cp` test-cache directory. The full qualification
 snapshots bind the runtime sources, managed specs and core fixture. Later
 compatibility-fixture and Python-loader changes have their own portable and
-compatibility-component evidence. At this local correction checkpoint, hosted
-macOS 15/26 reruns and forward replay had not run for these changes.
+compatibility-component evidence. Final corrected-fixture receipts are in the
+owner's `monterey-commit-quality` test-cache directory under the `final2-*`
+profiles. At this local correction checkpoint, hosted macOS 15/26 reruns and
+forward replay had not run for these changes.
 
 | Gate | State | Evidence required |
 | --- | --- | --- |
@@ -332,8 +407,8 @@ macOS 15/26 reruns and forward replay had not run for these changes.
 | independent C model | complete | GCC and selected Xcode syntax assertions |
 | modern local runtime regression | complete on recorded host | both compilers, ARM64 and translated x86-64, strict artifact checks |
 | compatibility component builds | complete locally | 12 x86-64 deployment-12.0 artifacts, both compilers/modes, loader/signature/import/LLVM proofs |
-| native Intel packaging CLI | unrun | source-bound campaign build receipt and manifests from its admitted host |
-| manifest-bound Mini execution | unrun | four builds × seven spawn or four task-token named outcomes, independently verified receipts |
+| native Intel packaging CLI | complete for corrected fixtures on 2026-11-11 | source-bound build receipt, both manifests and 12 audited executable components |
+| manifest-bound Mini execution | complete for corrected fixtures on 2026-11-11 | all 28 spawn and 16 task-token executions passed across both compilers/modes |
 | new hosted matrix / forward replay | unrun | changed-source macOS 15/26 native cells and kernel replay receipts |
 | shipping-source match | unresolved | Apple publication of matching shipping source or equivalent official evidence |
 | Process-Control Monterey integration | not started here | separate consumer admission, identity, ownership and lifecycle qualification |

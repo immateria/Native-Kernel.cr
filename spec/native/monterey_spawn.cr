@@ -157,7 +157,10 @@ module MontereySpawn
     child = 0
     rejected = Darwin::Spawn.create(pointerof(child), Pointer(UInt8).null, Pointer(Void).null,
       Pointer(Pointer(UInt8)).null, Pointer(Pointer(UInt8)).null)
-    check_rejection(rejected, child, 14, 0) == Rejection::Expected ? 0 : 3
+    # Darwin 21 rejects the null pathname during activation, after fork. XNU
+    # copies out a positive PID and internally reaps it before returning EFAULT;
+    # this error-result PID never grants caller collection ownership.
+    check_rejection(rejected, child, 14, 0, true) == Rejection::Expected ? 0 : 3
   end
 
   # The descriptor's file_actions_size and the copied action count/size are

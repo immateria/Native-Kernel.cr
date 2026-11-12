@@ -56,9 +56,11 @@ module ExecProof
     return 14 unless closed.primary == -1 && closed.error == 9
 
     # The spawn action changes the target to /. The runner's per-case directory
-    # is otherwise empty and cannot satisfy this relative lookup.
+    # is otherwise empty and cannot satisfy this relative lookup. With
+    # CLOEXEC_DEFAULT, stdin/stderr are also closed unless explicitly inherited,
+    # so a successful open can reuse descriptor 0 or 2.
     relative = Darwin::Descriptor.open("dev/null".to_unsafe, 0)
-    return 15 unless relative.error == 0 && relative.primary >= 3
+    return 15 unless relative.error == 0 && relative.primary >= 0
     return 16 unless Darwin::Descriptor.close(relative.primary.to_i32!).error == 0
 
     previous = uninitialized UInt8[32]

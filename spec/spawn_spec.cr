@@ -58,14 +58,34 @@ require "./spec_helper"
       {% end %}
     end
 
-    it "preserves spawn errno and leaves child output untouched on failure" do
+    it "preserves spawn errno and child output on admitted pre-fork rejection" do
       {% if Native::Kernel::Darwin.has_constant?(:Spawn) %}
-        child = 0
-        result = Native::Kernel::Darwin::Spawn.create(pointerof(child), Pointer(UInt8).null, Pointer(Void).null,
-          Pointer(Pointer(UInt8)).null, Pointer(Pointer(UInt8)).null)
-        result.primary.should eq(-1)
-        result.error.should eq(14) # EFAULT
-        child.should eq(0)
+        release = Native::Kernel::Darwin::Process.release
+        profile = Native::Kernel::Darwin::Spawn.profile(release)
+        if profile
+          descriptor = StaticArray(UInt64, 18).new(0_u64) # 144 bytes: largest audited descriptor.
+          actions = StaticArray(UInt64, 131).new(0_u64)   # 1,048 bytes: header plus one action.
+          (actions.to_unsafe.as(UInt8*) + profile.actions_capacity_offset).as(Int32*).value = 1
+          (actions.to_unsafe.as(UInt8*) + profile.actions_count_offset).as(Int32*).value = 1
+          (descriptor.to_unsafe.as(UInt8*) + profile.descriptor_actions_size_offset).as(UInt64*).value = 8_u64
+          (descriptor.to_unsafe.as(UInt8*) + profile.descriptor_actions_offset).as(UInt64*).value = actions.to_unsafe.address
+          path = "/dev/null/nk-never-exec".to_unsafe
+          arguments = StaticArray(UInt8*, 2).new(Pointer(UInt8).null)
+          arguments[0] = path
+          environment = StaticArray(UInt8*, 1).new(Pointer(UInt8).null)
+          child = 17_000_321
+          # The readable allocation holds a full action, but the declared size is
+          # smaller than PSF_ACTIONS_SIZE(1). XNU rejects it before fork. Avoid an
+          # unreadable descriptor address, which can stall Rosetta translation.
+          result = Native::Kernel::Darwin::Spawn.create(pointerof(child), path, descriptor.to_unsafe.as(Void*),
+            arguments.to_unsafe, environment.to_unsafe)
+          result.primary.should eq(-1)
+          result.error.should eq(22) # EINVAL
+          child.should eq(17_000_321)
+        else
+          # Unsupported releases must not reach the private syscall fixture.
+          [21, 24, 25].includes?(release).should be_false
+        end
       {% else %}
         fail "the typed Darwin spawn entry is unavailable"
       {% end %}
