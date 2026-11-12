@@ -6,9 +6,11 @@ Crystal artifacts. A passed mechanisms run still leaves the listed qualification
 limits (notably genuinely delivered EINTR) explicit in its receipt.
 """
 import argparse
+import base64
 import ctypes
 from datetime import datetime, timezone
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -125,8 +127,8 @@ def elf_object_sections(path, architecture, function_count):
                 all_sections_validated=True, initializers=False, writable_executable_sections=False)
 
 
-def crystal_stdlib_sources(environment, root):
-    """Parse Crystal's shell-escaped env value, then bind the selected source trees."""
+def crystal_search_directories(environment, root):
+    """Parse Crystal's shell-escaped search list in the compiler's lookup order."""
     assignments = [line.partition("=")[2] for line in environment.splitlines() if line.startswith("CRYSTAL_PATH=")]
     if len(assignments) != 1:
         raise ProofError("Expected one CRYSTAL_PATH in crystal env")
@@ -142,7 +144,12 @@ def crystal_stdlib_sources(environment, root):
     directories = [(Path(root) / path).resolve() for path in paths if (Path(root) / path).is_dir()]
     if not any((directory / "prelude.cr").is_file() for directory in directories):
         raise ProofError("Cannot locate the selected Crystal standard-library directory")
-    sources = {str(path): common.sha256_file(path) for directory in directories
+    return directories
+
+
+def crystal_stdlib_sources(environment, root):
+    """Bind every selected search-source tree, including the actual stdlib."""
+    sources = {str(path): common.sha256_file(path) for directory in crystal_search_directories(environment, root)
                for path in sorted(directory.rglob("*.cr"))}
     if not sources:
         raise ProofError("Cannot identify the selected Crystal standard-library sources")
@@ -153,6 +160,40 @@ def crystal_relative_path(path, directory):
     """Crystal requires explicit relative paths, resolved at the caller's location."""
     relative = Path(os.path.relpath(path, directory)).as_posix()
     return relative if relative.startswith(("./", "../")) else "./" + relative
+
+
+def floor_prelude_bytes(original):
+    """Remove only 1.10's exact standalone managed-main require, byte for byte.
+
+    The selected compiler's prelude is the input, not a vendored stdlib. Refuse
+    absent, duplicate or malformed active main references instead of guessing at
+    other prelude shapes. Comments are inert and remain completely unchanged.
+    """
+    lines = original.splitlines(keepends=True)
+    mentions = [index for index, line in enumerate(lines)
+                if b"crystal/main" in line and not line.lstrip().startswith(b"#")]
+    expected = b'require "crystal/main"'
+    if len(mentions) != 1 or lines[mentions[0]] not in (expected, expected + b"\n", expected + b"\r\n"):
+        raise ProofError('Floor prelude must contain exactly one standalone require "crystal/main"')
+    index = mentions[0]
+    offset, removed = sum(map(len, lines[:index])), lines[index]
+    generated = original[:offset] + original[offset + len(removed):]
+    if generated[:offset] + removed + generated[offset:] != original:
+        raise ProofError("Floor prelude transformation changed other bytes")
+    return generated, {"operation": 'Remove exactly the single standalone require "crystal/main" line; no other bytes changed',
+                       "removed_line": removed.decode("ascii"), "line_number": index + 1,
+                       "byte_offset": offset, "original_size": len(original), "generated_size": len(generated),
+                       "all_other_bytes_preserved": True}
+
+
+def check_floor_prelude(record):
+    """Recheck both selected and generated inputs before compilation and at exit."""
+    original, generated = Path(record["original_path"]).read_bytes(), Path(record["generated_path"]).read_bytes()
+    expected, transformation = floor_prelude_bytes(original)
+    if (hashlib.sha256(original).hexdigest() != record["original_sha256"] or
+            hashlib.sha256(generated).hexdigest() != record["generated_sha256"] or
+            generated != expected or transformation != record["transformation"]):
+        raise ProofError("Selected/generated floor prelude or exact transformation changed")
 
 
 def function_sections(assembly, architecture):
@@ -420,6 +461,41 @@ class Runner:
         self.receipt["compiler"]["environment"] = environment["stdout"]
         self.receipt["compiler"]["stdlib_sha256"] = crystal_stdlib_sources(environment["stdout"], self.root)
         self.compiler, self.version = compiler, version
+        self.prepare_unmanaged_entry(environment["stdout"])
+
+    def prepare_unmanaged_entry(self, environment):
+        entry = self.receipt["unmanaged_entry"] = {"strategy": "compiler-without-main-flag", "flags": ["-Dwithout_main"]}
+        if self.version == "1.10.0":
+            # This release ignores without_main and always requires crystal/main.
+            # Use its actual first-selected prelude, changing no other stdlib input.
+            original = next(directory / "prelude.cr" for directory in crystal_search_directories(environment, self.root)
+                            if (directory / "prelude.cr").is_file())
+            data = original.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if self.receipt["compiler"]["stdlib_sha256"].get(str(original)) != digest:
+                raise ProofError("Selected floor prelude differs from the hashed compiler inputs")
+            generated, transformation = floor_prelude_bytes(data)
+            path = self.build / "prelude-without-main-1.10.0.cr"
+            path.write_bytes(generated)
+            prelude = {"original_path": str(original), "original_sha256": digest,
+                       "generated_path": str(path), "generated_sha256": common.sha256_file(path),
+                       "transformation": transformation}
+            check_floor_prelude(prelude)
+            entry.update(strategy="selected-floor-prelude-minus-main", prelude=prelude,
+                         flags=["-Dwithout_main", "--prelude", crystal_relative_path(path, self.root)])
+            # Retain the exact generated bytes with the source-bound evidence.
+            shutil.copy2(path, self.export / path.name)
+        self.write()
+
+    def unmanaged_flags(self):
+        if self.version != "1.10.0":
+            return ["-Dwithout_main"]
+        entry = self.receipt.get("unmanaged_entry", {})
+        prelude = entry.get("prelude")
+        if not prelude:
+            raise ProofError("Floor unmanaged build requires the source-bound generated prelude")
+        check_floor_prelude(prelude)
+        return ["-Dwithout_main", "--prelude", crystal_relative_path(prelude["generated_path"], self.root)]
 
     def rejection_tests(self, auditor):
         reasons = {"external": "unapproved symbol write", "mutable": "mutable global", "incorrect": "indirect or unrecognized", "darwin": "indirect or unrecognized"}
@@ -471,7 +547,8 @@ class Runner:
         artifact = self.build / name
         record = self.receipt["artifacts"][name] = {"status": "building", "execution": "unrun"}
         source = self.root / ("spec/native/linux/" + ("raw_probe" if fixture == "raw" else "behavior") + ".cr")
-        flags = [self.compiler, "build", "--cross-compile", "--single-module", "--no-debug", "--error-on-warnings", "-Dwithout_main", "--emit", "llvm-ir,asm"]
+        flags = [self.compiler, "build", "--cross-compile", "--single-module", "--no-debug", "--error-on-warnings"]
+        flags += self.unmanaged_flags() + ["--emit", "llvm-ir,asm"]
         if self.cross:
             flags += ["--target", self.config["profiles"][self.architecture]["target"]]
         if optimization == "release":
@@ -620,6 +697,13 @@ class Runner:
             selected = dict(compiler.get("stdlib_sha256", {}))
             if compiler.get("sha256"):
                 selected[compiler["path"]] = compiler["sha256"]
+            prelude = self.receipt.get("unmanaged_entry", {}).get("prelude")
+            if prelude:
+                selected[prelude["generated_path"]] = prelude["generated_sha256"]
+                try:
+                    check_floor_prelude(prelude)
+                except (ProofError, OSError) as error:
+                    self.receipt.update(status="failed", reason="Floor prelude input changed: " + str(error))
             self.receipt["compiler_inputs_unchanged"] = all(Path(path).is_file() and common.sha256_file(path) == digest for path, digest in selected.items()) if selected else None
             if selected and not self.receipt["compiler_inputs_unchanged"]:
                 self.receipt.update(status="failed", reason="Compiler/stdlib inputs changed during proof")
@@ -627,6 +711,79 @@ class Runner:
             self.receipt["completed_at"] = datetime.now(timezone.utc).isoformat()
             self.write()
         return 0 if self.receipt["status"] in ("mechanisms-passed", "cross-compile-only") else 1
+
+
+def manifest_sha256(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def receipt_review(path):
+    """A bounded, SHA-bound view of the actual receipt, not a second proof.
+
+    Keep the complete artifact/case/stage rosters and input-integrity results
+    inspectable through the Checks API when artifact downloads are unavailable.
+    Large source/function manifests stay in receipt.json; bind their exact
+    content by count and canonical-JSON hash, never by truncation or a fake pass.
+    """
+    serialized = Path(path).read_bytes()
+    receipt = json.loads(serialized)
+    fields = ("status", "qualification", "mode", "architecture", "expected_compiler", "git_head", "git_branch",
+              "host", "source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged", "tools", "tools_scope",
+              "spec_examples", "linux_spec_examples", "cases", "unproduced_artifacts", "final_adopted_children",
+              "unmanaged_entry", "limits", "reason", "workflow")
+    review = {key: receipt.get(key) for key in fields}
+    review.update(review_schema=1, receipt_sha256=hashlib.sha256(serialized).hexdigest(),
+                  scope="Bounded review of receipt.json; full source/function manifests remain in the SHA-bound receipt")
+    review["source_manifests"] = {key: {"count": len(receipt.get(key, {})), "sha256": manifest_sha256(receipt.get(key, {}))}
+                                  for key in ("source_before", "source_after")}
+    compiler = dict(receipt.get("compiler", {}))
+    stdlib = compiler.pop("stdlib_sha256", {})
+    compiler["stdlib_sources"] = {"count": len(stdlib), "sha256": manifest_sha256(stdlib)}
+    # The parsed environment/path selection and identity remain in the full receipt.
+    compiler.pop("environment", None)
+    review["compiler"] = compiler
+    review["stages"] = []
+    for stage in receipt["stages"]:
+        record = {key: stage.get(key) for key in ("name", "status", "exit_code", "output_truncated", "expected_rejection")}
+        if stage["name"].startswith("compile-") or stage["name"] == "format":
+            record["command"] = stage["command"]
+        if stage["name"].startswith("imports-"):
+            record.update(stdout=stage["stdout"], stderr=stage["stderr"])
+        if stage["status"] != "passed":
+            record.update(stdout_tail=stage["stdout"][-2048:], stderr_tail=stage["stderr"][-2048:])
+        review["stages"].append(record)
+    review["artifacts"] = {}
+    for name, artifact in receipt["artifacts"].items():
+        record = dict(artifact)
+        if "function_sections" in record:
+            section = dict(record["function_sections"])
+            functions = section.pop("functions")
+            section.update(function_count=len(functions), functions_sha256=manifest_sha256(functions))
+            record["function_sections"] = section
+        review["artifacts"][name] = record
+    return review
+
+
+def write_receipt_review(path, *, ci=False):
+    review = receipt_review(path)
+    payload = json.dumps(review, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > common.OUTPUT_LIMIT - 512:
+        raise ProofError("Receipt review exceeds the unchanged 64-KiB output bound")
+    encoded = base64.b64encode(gzip.compress(payload, mtime=0)).decode("ascii")
+    parts = [encoded[start:start + 3600] for start in range(0, len(encoded), 3600)]
+    # The hosted runner truncates issue messages at 4096 characters and records
+    # at most ten notices per step. Compress, number and hash the complete view;
+    # never publish a truncated JSON fragment as if it were a complete receipt.
+    digest = hashlib.sha256(payload).hexdigest()
+    notices = ["::notice title=Native Linux receipt review " + str(index) + "/" + str(len(parts)) +
+               "::NK_LINUX_RECEIPT_REVIEW " + digest + " " + str(index) + "/" + str(len(parts)) + " " + part
+               for index, part in enumerate(parts, 1)]
+    if len(parts) > 10 or len(("\n".join(notices) + "\n").encode()) > common.OUTPUT_LIMIT - 512:
+        raise ProofError("Receipt review exceeds the bounded Checks-notice budget")
+    common.write_json(Path(path).with_name("receipt-review.json"), review)
+    if ci:
+        print("\n".join(notices))
+    return review
 
 
 def main(argv=None):
@@ -642,6 +799,7 @@ def main(argv=None):
     try:
         runner = Runner(args)
         code = runner.run()
+        write_receipt_review(runner.export / "receipt.json", ci=os.environ.get("GITHUB_ACTIONS") == "true")
         print(runner.receipt["status"] + ": " + str(runner.export / "receipt.json"))
         return code
     except (ProofError, OSError, ValueError) as error:

@@ -49,7 +49,7 @@ describe Native::Kernel::Verification do
 
   it "admits the six explicit arithmetic overflow-result intrinsic families" do
     %w(uadd sadd usub ssub umul smul).each do |operation|
-      %w(i8 i32 i64).each do |type|
+      %w(i8 i9 i16 i17 i32 i33 i64 i65 i128 i129).each do |type|
         ir = <<-LLVM
           declare { #{type}, i1 } @llvm.#{operation}.with.overflow.#{type}(#{type}, #{type})
           define i32 @main() {
@@ -63,14 +63,18 @@ describe Native::Kernel::Verification do
   end
 
   it "does not grant general LLVM or similarly named arithmetic admission" do
-    %w(llvm.trap llvm.assume llvm.uadd.sat.i64 llvm.uadd.with.overflowing.i64 llvm.other.with.overflow.i64).each do |name|
+    %w(llvm.trap llvm.assume llvm.uadd.sat.i64 llvm.uadd.with.overflowing.i64 llvm.other.with.overflow.i64
+      llvm.uadd.with.overflow.evil llvm.uadd.with.overflow. llvm.uadd.with.overflow.i64.extra
+      llvm.uadd.with.overflow.i64evil llvm.uadd.with.overflow.i0 llvm.uadd.with.overflow.i01 llvm.uadd.with.overflow.i66
+      llvm.uad.with.overflow.i64 llvm.saddd.with.overflow.i64 llvm.umul.with.overflows.i64
+      llvm.ssub.with.overflow.v2i64 llvm.smul.with.overflow.nxv2i64).each do |name|
       ir = "declare void @#{name}()\ndefine i32 @main() {\n  call void @#{name}()\n  ret i32 0\n}\n"
       expect_raises(ArgumentError, /unapproved symbol/) { Native::Kernel::Verification.verify(ir) }
     end
   end
 
   it "still rejects managed overflow handling and runtime state after safe arithmetic" do
-    %w(__crystal_raise_overflow GC_malloc __crystal_init _Unwind_RaiseException).each do |name|
+    %w(__crystal_raise_overflow GC_malloc __crystal_init _Unwind_RaiseException __cxa_throw).each do |name|
       ir = <<-LLVM
         declare { i64, i1 } @llvm.uadd.with.overflow.i64(i64, i64)
         declare void @#{name}()

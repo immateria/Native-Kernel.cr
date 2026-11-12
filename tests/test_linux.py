@@ -2,11 +2,17 @@
 
 Kernel execution belongs to linux_runner.py, never inferred from these tests.
 """
+from contextlib import redirect_stdout
+import base64
+import gzip
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import struct
 import subprocess
 import sys
@@ -262,6 +268,169 @@ class CrystalEnvironmentTests(unittest.TestCase):
                 runner.crystal_stdlib_sources(environment, self.root)
 
 
+class LinuxFloorPreludeTests(unittest.TestCase):
+    MAIN = b'require "crystal/main"\n'
+    ORIGINAL = b'# keep every byte \xc3\xa9\r\nrequire "object"\n' + MAIN + b'# require "crystal/main" is inert\r\nrequire "array"\n'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="nk-floor prelude-")
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.stdlib = self.directory / "selected stdlib"
+        self.stdlib.mkdir()
+        (self.stdlib / "prelude.cr").write_bytes(self.ORIGINAL)
+
+    def proof(self, name="proof", version="1.10.0", environment=None):
+        proof = runner.Runner(proof_args(self.directory / name, expected_compiler=version))
+        proof.compiler, proof.version = "fixture-compiler", version
+        environment = environment or ("CRYSTAL_PATH=" + shlex.quote(str(self.stdlib)))
+        proof.receipt["compiler"] = {"stdlib_sha256": runner.crystal_stdlib_sources(environment, proof.root)}
+        return proof, environment
+
+    def test_exact_one_line_removal_preserves_all_other_bytes_and_is_reversible(self):
+        for ending in (b"\n", b"\r\n", b""):
+            original = b'# comment\r\nrequire "object"\n' + b'require "crystal/main"' + ending
+            if ending:
+                original += b'# require "crystal/main" stays\r\nrequire "array"\n'
+            generated, transformation = runner.floor_prelude_bytes(original)
+            self.assertEqual(generated, original.replace(b'require "crystal/main"' + ending, b"", 1))
+            self.assertEqual(transformation["line_number"], 3)
+            self.assertEqual(transformation["byte_offset"], len(b'# comment\r\nrequire "object"\n'))
+            self.assertEqual(transformation["original_size"] - transformation["generated_size"], len(b'require "crystal/main"' + ending))
+            offset = transformation["byte_offset"]
+            self.assertEqual(generated[:offset] + transformation["removed_line"].encode("ascii") + generated[offset:], original)
+            self.assertTrue(transformation["all_other_bytes_preserved"])
+        generated, _ = runner.floor_prelude_bytes(self.ORIGINAL)
+        self.assertEqual(generated, self.ORIGINAL.replace(self.MAIN, b"", 1))
+
+    def test_zero_duplicate_and_malformed_main_requires_fail_closed(self):
+        malformed = (b"", b'require "array"\n', b'# require "crystal/main"\n', self.MAIN * 2,
+                     b"require 'crystal/main'\n", b' require "crystal/main"\n', b'require  "crystal/main"\n',
+                     b'require "crystal/main" # not the expected statement\n', b'require "crystal/main',
+                     b'require "./crystal/main"\n', b'require "crystal/main.cr"\n',
+                     b'require "crystal/main" if true\n', b'require "crystal/main"; require "array"\n')
+        for original in malformed:
+            with self.subTest(original=original), self.assertRaisesRegex(runner.ProofError, "exactly one standalone"):
+                runner.floor_prelude_bytes(original)
+        for second in malformed[4:]:
+            with self.subTest(second=second), self.assertRaises(runner.ProofError):
+                runner.floor_prelude_bytes(self.MAIN + second)
+
+    def test_relative_quoted_escaped_and_space_paths_keep_correct_lookup_and_hashes(self):
+        relative = os.path.relpath(self.stdlib, ROOT)
+        values = (shlex.quote(str(self.stdlib)), '"' + str(self.stdlib) + '"',
+                  str(self.stdlib).replace(" ", "\\ "), shlex.quote(relative), relative.replace(" ", "\\ "))
+        for index, value in enumerate(values):
+            proof, environment = self.proof(str(index), environment="CRYSTAL_PATH=lib:" + value)
+            proof.prepare_unmanaged_entry(environment)
+            entry = json.loads((proof.export / "receipt.json").read_text())["unmanaged_entry"]
+            prelude = entry["prelude"]
+            generated = Path(prelude["generated_path"])
+            self.assertTrue(generated.is_relative_to(proof.build))
+            self.assertFalse(generated.is_relative_to(ROOT))
+            self.assertEqual(Path(prelude["original_path"]).resolve(), (self.stdlib / "prelude.cr").resolve())
+            self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
+            self.assertEqual(generated.read_bytes(), self.ORIGINAL.replace(self.MAIN, b"", 1))
+            self.assertEqual(prelude["original_sha256"], hashlib.sha256(self.ORIGINAL).hexdigest())
+            self.assertEqual(prelude["generated_sha256"], runner.common.sha256_file(generated))
+            self.assertEqual(proof.receipt["compiler"]["stdlib_sha256"][prelude["original_path"]], prelude["original_sha256"])
+            flags = proof.unmanaged_flags()
+            self.assertEqual(flags[:2], ["-Dwithout_main", "--prelude"])
+            self.assertTrue(flags[2].startswith(("./", "../")))
+            self.assertEqual((proof.root / flags[2]).resolve(), generated.resolve())
+            self.assertEqual(entry["flags"], flags)
+            runner.check_floor_prelude(prelude)
+
+    def test_first_selected_prelude_wins_including_a_relative_search_entry(self):
+        earlier = self.directory / "earlier"
+        earlier.mkdir()
+        data = b'# first search entry\n' + self.MAIN
+        (earlier / "prelude.cr").write_bytes(data)
+        environment = "CRYSTAL_PATH=" + shlex.quote(os.path.relpath(earlier, ROOT) + ":" + str(self.stdlib))
+        proof, environment = self.proof(environment=environment)
+        proof.prepare_unmanaged_entry(environment)
+        prelude = proof.receipt["unmanaged_entry"]["prelude"]
+        self.assertEqual(Path(prelude["original_path"]), (earlier / "prelude.cr").resolve())
+        self.assertEqual(prelude["original_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
+
+    def test_missing_or_malformed_search_paths_cannot_generate_a_prelude(self):
+        for index, environment in enumerate(("", "CRYSTAL_PATH=", "CRYSTAL_PATH='unterminated", "CRYSTAL_PATH=missing", "CRYSTAL_PATH=lib extra")):
+            proof, _ = self.proof(str(index))
+            with self.subTest(environment=environment), self.assertRaises(runner.ProofError):
+                proof.prepare_unmanaged_entry(environment)
+            self.assertEqual(list(proof.build.iterdir()), [])
+
+    def test_original_must_match_the_selected_hashed_stdlib_source(self):
+        proof, environment = self.proof()
+        proof.receipt["compiler"]["stdlib_sha256"][str((self.stdlib / "prelude.cr").resolve())] = "0" * 64
+        with self.assertRaisesRegex(runner.ProofError, "hashed compiler inputs"):
+            proof.prepare_unmanaged_entry(environment)
+        self.assertEqual(list(proof.build.iterdir()), [])
+
+    def test_floor_build_refuses_unprepared_or_mutated_prelude_before_compiling(self):
+        for index, change in enumerate(("unprepared", "original", "generated", "metadata", "forged generated hash")):
+            proof, environment = self.proof(str(index))
+            if change != "unprepared":
+                proof.prepare_unmanaged_entry(environment)
+                prelude = proof.receipt["unmanaged_entry"]["prelude"]
+                if change == "original":
+                    Path(prelude["original_path"]).write_bytes(self.ORIGINAL + b"# mutation\n")
+                elif change == "metadata":
+                    prelude["transformation"]["byte_offset"] += 1
+                else:
+                    Path(prelude["generated_path"]).write_bytes(b"# wrong prelude\n")
+                    if change == "forged generated hash":
+                        prelude["generated_sha256"] = runner.common.sha256_file(prelude["generated_path"])
+            with mock.patch.object(proof, "stage") as stage, self.subTest(change=change):
+                with self.assertRaises(runner.ProofError):
+                    proof.build_probe("raw", "development", "fixture-auditor")
+                stage.assert_not_called()
+            (self.stdlib / "prelude.cr").write_bytes(self.ORIGINAL)
+
+    def test_final_receipt_rechecks_generated_prelude_as_a_compiler_input(self):
+        proof, environment = self.proof()
+        proof.prepare_unmanaged_entry(environment)
+        generated = Path(proof.receipt["unmanaged_entry"]["prelude"]["generated_path"])
+        generated.write_bytes(generated.read_bytes() + b"# late mutation\n")
+        proof.args.record_failure = "test stops before executing any proof stage"
+        self.assertEqual(proof.run(), 1)
+        self.assertEqual(proof.receipt["status"], "failed")
+        self.assertFalse(proof.receipt["compiler_inputs_unchanged"])
+        self.assertEqual(proof.receipt["qualification"], "incomplete")
+        self.assertEqual(proof.receipt["cases"], [])
+
+    def test_all_floor_fixture_modes_use_the_derived_prelude_and_unchanged_entry(self):
+        proof, environment = self.proof()
+        proof.prepare_unmanaged_entry(environment)
+        class StopBeforeCompilation(Exception):
+            pass
+        for fixture in ("raw", "behavior"):
+            for mode in ("development", "release"):
+                with mock.patch.object(proof, "stage", side_effect=StopBeforeCompilation) as stage:
+                    with self.assertRaises(StopBeforeCompilation):
+                        proof.build_probe(fixture, mode, "fixture-auditor")
+                    name, command = stage.call_args.args
+                    self.assertEqual(name, "compile-" + fixture + "-" + mode)
+                    self.assertIn("-Dwithout_main", command)
+                    self.assertEqual((proof.root / command[command.index("--prelude") + 1]).resolve(),
+                                     Path(proof.receipt["unmanaged_entry"]["prelude"]["generated_path"]))
+                    self.assertNotIn("-O0", command)  # Not a 1.10 option.
+                    source = Path(command[-3]).read_text()
+                    self.assertIn("fun main(argc : Int32, argv : UInt8**, stack : UInt64*, call_stack : UInt64) : Int32", source)
+
+    def test_current_release_keeps_without_main_without_any_stdlib_rewrite(self):
+        proof, environment = self.proof(version="1.22.2")
+        with mock.patch.object(runner, "floor_prelude_bytes") as transform:
+            proof.prepare_unmanaged_entry(environment)
+            transform.assert_not_called()
+        self.assertEqual(proof.unmanaged_flags(), ["-Dwithout_main"])
+        self.assertEqual(proof.receipt["unmanaged_entry"]["flags"], ["-Dwithout_main"])
+        self.assertNotIn("prelude", proof.receipt["unmanaged_entry"])
+        self.assertEqual(list(proof.build.iterdir()), [])
+        self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
+
+
 class LinuxFunctionSectionsTests(unittest.TestCase):
     def test_preserves_every_original_assembly_line_and_instruction(self):
         for architecture, marker in (("x86_64", "@"), ("aarch64", "%")):
@@ -414,6 +583,126 @@ class LinuxInputContracts(unittest.TestCase):
         for item in references["references"]:
             self.assertTrue(item["files"])
             self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest in item["files"].values()))
+
+
+class LinuxReceiptReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="nk-receipt-review-")
+        self.addCleanup(self.temp.cleanup)
+        self.proof = runner.Runner(proof_args(Path(self.temp.name) / "proof"))
+        self.path = self.proof.export / "receipt.json"
+
+    def fixture(self):
+        # Synthetic metadata tests only, never a native proof or qualification.
+        receipt = self.proof.receipt
+        receipt.update(status="mechanisms-passed", source_after=dict(receipt["source_before"]), source_unchanged=True,
+                       tool_inputs_unchanged=True, compiler_inputs_unchanged=True, final_adopted_children=[],
+                       compiler={"version": "1.22.2", "sha256": "fixture-only", "stdlib_sha256": {"prelude.cr": "fixture"}},
+                       spec_examples=23, linux_spec_examples=11, unproduced_artifacts=[])
+        receipt["cases"] = [{"name": case, "optimization": mode, "status": "passed", "completion_observed": True, "adopted_children": []}
+                            for case in ("raw",) + runner.CASES for mode in ("development", "release")]
+        receipt["artifacts"] = {fixture + "-" + mode: {"sha256": "fixture-only", "status": "passed", "execution": "native-passed",
+                               "function_sections": {"operation": "fixture-only", "functions": ["function_" + str(i) for i in range(6000)]}}
+                               for fixture in ("raw", "behavior") for mode in ("development", "release")}
+        receipt["stages"] = [dict(stage_result(), name="imports-raw-development", command=["nm", "-u", "fixture"])]
+        self.proof.write()
+        return receipt
+
+    def test_review_is_sha_bound_to_actual_receipt_and_preserves_complete_rosters(self):
+        receipt = self.fixture()
+        original = self.path.read_bytes()
+        review = runner.write_receipt_review(self.path)
+        self.assertEqual(review["receipt_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(review["cases"], receipt["cases"])
+        self.assertEqual(set(review["artifacts"]), set(receipt["artifacts"]))
+        self.assertEqual([stage["name"] for stage in review["stages"]], [stage["name"] for stage in receipt["stages"]])
+        self.assertEqual(review["stages"][0]["stdout"], "")
+        self.assertEqual(review["stages"][0]["stderr"], "")
+        self.assertEqual(review["source_manifests"]["source_before"]["sha256"], runner.manifest_sha256(receipt["source_before"]))
+        self.assertEqual(review["source_manifests"]["source_after"], review["source_manifests"]["source_before"])
+        self.assertEqual(review["compiler"]["stdlib_sources"]["count"], 1)
+        for artifact in review["artifacts"].values():
+            self.assertEqual(artifact["function_sections"]["function_count"], 6000)
+            self.assertEqual(artifact["function_sections"]["functions_sha256"], runner.manifest_sha256(receipt["artifacts"]["raw-development"]["function_sections"]["functions"]))
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(json.loads((self.proof.export / "receipt-review.json").read_text()), review)
+
+    def test_failed_or_mutated_input_cannot_be_relabelled_as_a_pass(self):
+        receipt = self.fixture()
+        receipt.update(status="failed", source_unchanged=False, tool_inputs_unchanged=False, compiler_inputs_unchanged=False,
+                       reason="fixture mutation", final_adopted_children=[{"pid": 123, "status": 9}])
+        receipt["stages"].append(dict(stage_result(exit_code=1, stderr="exact failure"), name="compile-raw-development", command=["compiler", "--prelude", "../external prelude.cr"]))
+        self.proof.write()
+        review = runner.write_receipt_review(self.path)
+        self.assertEqual(review["status"], "failed")
+        self.assertEqual(review["qualification"], "incomplete")
+        for field in ("source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged"):
+            self.assertFalse(review[field])
+        self.assertEqual(review["final_adopted_children"], receipt["final_adopted_children"])
+        self.assertEqual(review["stages"][-1]["stderr_tail"], "exact failure")
+        self.assertEqual(review["stages"][-1]["command"], receipt["stages"][-1]["command"])
+
+    def test_checks_notices_are_bounded_complete_numbered_sha_bound_payloads(self):
+        self.fixture()
+        self.proof.receipt["reason"] = ("literal %0A plus newline\n::error::not a workflow command" +
+                                        "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(200)))
+        self.proof.write()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            review = runner.write_receipt_review(self.path, ci=True)
+        notices = output.getvalue().splitlines()
+        self.assertGreater(len(notices), 1)
+        self.assertLessEqual(len(notices), 10)
+        self.assertLess(len(output.getvalue().encode()), runner.common.OUTPUT_LIMIT)
+        chunks, digests = {}, set()
+        for notice in notices:
+            self.assertTrue(notice.startswith("::notice title=Native Linux receipt review "))
+            message = notice.split("::", 2)[2]
+            self.assertLessEqual(len(message), 4096)
+            match = re.fullmatch(r"NK_LINUX_RECEIPT_REVIEW ([0-9a-f]{64}) (\d+)/(\d+) ([A-Za-z0-9+/=]+)", message)
+            self.assertIsNotNone(match)
+            self.assertEqual(int(match[3]), len(notices))
+            chunks[int(match[2])] = match[4]
+            digests.add(match[1])
+        self.assertEqual(set(chunks), set(range(1, len(notices) + 1)))
+        decoded = gzip.decompress(base64.b64decode("".join(chunks[i] for i in sorted(chunks)), validate=True))
+        self.assertEqual(digests, {hashlib.sha256(decoded).hexdigest()})
+        self.assertEqual(json.loads(decoded), review)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            runner.write_receipt_review(self.path, ci=False)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_oversize_review_fails_instead_of_truncating_or_raising_capture_limit(self):
+        self.fixture()
+        self.proof.receipt["artifacts"]["raw-development"]["path"] = "x" * runner.common.OUTPUT_LIMIT
+        self.proof.write()
+        original = self.path.read_bytes()
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(runner.ProofError, "unchanged 64-KiB"):
+            runner.write_receipt_review(self.path, ci=True)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertFalse((self.proof.export / "receipt-review.json").exists())
+        self.assertEqual(runner.common.OUTPUT_LIMIT, 65536)
+        self.proof.receipt["artifacts"]["raw-development"].pop("path")
+        self.proof.write()
+        with mock.patch.object(runner.gzip, "compress", return_value=b"x" * 36000):
+            with self.assertRaisesRegex(runner.ProofError, "Checks-notice budget"):
+                runner.write_receipt_review(self.path, ci=True)
+        self.assertFalse((self.proof.export / "receipt-review.json").exists())
+
+    def test_cross_only_and_blocked_receipts_have_no_invented_native_completion(self):
+        for status, mode in (("blocked", "native"), ("cross-compile-only", "cross-compile-only")):
+            self.proof.receipt.update(status=status, mode=mode, cases=[], unproduced_artifacts=["raw-development"])
+            self.proof.write()
+            review = runner.write_receipt_review(self.path)
+            self.assertEqual(review["status"], status)
+            self.assertEqual(review["mode"], mode)
+            self.assertEqual(review["cases"], [])
+            self.assertEqual(review["unproduced_artifacts"], ["raw-development"])
+            self.assertIsNone(review["spec_examples"])
+            self.assertEqual(review["qualification"], "incomplete")
 
 
 class LinuxRefusalTests(unittest.TestCase):

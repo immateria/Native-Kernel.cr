@@ -141,9 +141,12 @@ There is no copied timeout, retry or interpretation of unexpected event bits.
 
 ## Evidence, sources and licenses
 
-[ci/linux-references.json](../ci/linux-references.json) records 116 file hashes
-from eight external shallow/sparse, detached snapshots, including the additional
-floor compiler source. Canonical Linux v6.6 is
+[ci/linux-references.json](../ci/linux-references.json) records 118 file hashes
+at eight immutable external source pins, including the floor compiler source
+and the overflow code-generation review. Original snapshots were external,
+shallow/sparse and detached; the two additional Crystal primitive files were
+retrieved through the GitHub content API at those exact compiler pins.
+Canonical Linux v6.6 is
 `ffc253263a1375a65fa6c9f62a893e9767fbebfa`. Independent entries/error decoding
 use jasonwhite/syscalls `fb4ebc28f8a4da147f03a856959306a082797a07`;
 wrapper semantics use rustix `ffa6ee556f54ef646c5cfc67afc72703ae3a7382`.

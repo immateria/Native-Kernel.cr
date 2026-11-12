@@ -152,6 +152,29 @@ The bootstrap script retains compiler/source hashes. It must actually produce
 and run native 1.10.0 before the driver will accept the cell. A bootstrap error
 is a failed/incomplete cell, not a substituted compiler or successful skip.
 
+For unmanaged 1.10.0 builds, the driver derives an external build-local prelude
+from the first `prelude.cr` selected by that exact compiler's `CRYSTAL_PATH`.
+It removes only the single standalone `require "crystal/main"` line: 1.10.0's
+ordinary prelude defines managed C `main` even with `-Dwithout_main`. Missing,
+duplicate or malformed main references fail closed. The receipt binds both
+prelude paths/hashes, the removed bytes/offset and byte-preserving transformation;
+both inputs are rechecked before compilation and at exit. No stdlib is vendored,
+no fixture entry ABI changes, and current compilers keep `-Dwithout_main` without
+any prelude rewrite. LLVM audit, static no-import linking and native execution
+remain mandatory on both releases. Overflow-intrinsic admission uses complete
+anchored scalar integer overload names, never the overflow-family prefixes.
+
+`export/receipt-review.json` is a bounded view of the actual full receipt, bound
+by its SHA-256. It retains all stage, artifact and runtime-case records needed for
+roster/input checks; large source/function manifests are represented by counts
+and canonical-JSON hashes, not truncated. CI also emits the complete view as
+numbered, SHA-bound gzip/base64 Checks notices (at most ten, each below 4 KiB,
+all below the unchanged 64-KiB capture bound) so it can be reconstructed and
+inspected without downloading the artifact archive. The full receipt/manifests
+remain in the unchanged three-day evidence upload. This
+view adds no pass or qualification decision and never substitutes for native
+execution. Missing, failed or incomplete evidence remains exactly that.
+
 Local execution:
 
 ```sh

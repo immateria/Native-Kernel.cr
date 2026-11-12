@@ -3,7 +3,12 @@ module Native::Kernel::Verification
   TOKEN      = /([@%])("(?:\\.|[^"\\])*"|[-a-zA-Z$._0-9]+)|"(?:\\.|[^"\\])*"|;[^\n]*/
   CALL       = /\A\s*(?:%(?:"(?:\\.|[^"\\])*"|[-a-zA-Z$._0-9]+)\s*=\s*)?(?:(?:tail|musttail|notail)\s+)?(?:call|invoke|callbr)\s+/
   ASM        = /\basm(?: sideeffect)? "((?:\\.|[^"\\])*)", "((?:\\.|[^"\\])*)"/
-  INTRINSICS = %w(llvm.memcpy. llvm.memmove. llvm.memset. llvm.lifetime.start. llvm.lifetime.end. llvm.expect. llvm.smin. llvm.smax. llvm.experimental.cttz.elts. llvm.uadd.with.overflow. llvm.sadd.with.overflow. llvm.usub.with.overflow. llvm.ssub.with.overflow. llvm.umul.with.overflow. llvm.smul.with.overflow.)
+  INTRINSICS = %w(llvm.memcpy. llvm.memmove. llvm.memset. llvm.lifetime.start. llvm.lifetime.end. llvm.expect. llvm.smin. llvm.smax. llvm.experimental.cttz.elts.)
+
+  # Complete scalar overload names: Crystal's fixed widths and the floor's
+  # one-bit mixed-signedness widening (codegen/primitives.cr at both source pins).
+  # No arbitrary suffix, vector or scalable-vector admission follows from this.
+  OVERFLOW_INTRINSIC = /\Allvm\.(?:uadd|sadd|usub|ssub|umul|smul)\.with\.overflow\.i(?:8|9|16|17|32|33|64|65|128|129)\z/
 
   private def self.symbol(line : String) : String?
     line.scan(TOKEN) { |match| return match[2] if match[1]? == "@" }
@@ -74,7 +79,7 @@ module Native::Kernel::Verification
         body.scan(TOKEN) { |match| pending << match[2] if match[1]? == "@" }
       else
         plain = name.strip('"')
-        unless native_symbols.includes?(plain) || INTRINSICS.any? { |prefix| plain.starts_with?(prefix) }
+        unless native_symbols.includes?(plain) || plain.matches?(OVERFLOW_INTRINSIC) || INTRINSICS.any? { |prefix| plain.starts_with?(prefix) }
           raise ArgumentError.new("native helper reaches unapproved symbol #{name}")
         end
       end
