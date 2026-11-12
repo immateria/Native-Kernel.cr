@@ -155,10 +155,13 @@ is a failed/incomplete cell, not a substituted compiler or successful skip.
 For unmanaged 1.10.0 builds, the driver derives an external build-local prelude
 from the first `prelude.cr` selected by that exact compiler's `CRYSTAL_PATH`.
 It removes only the single standalone `require "crystal/main"` line: 1.10.0's
-ordinary prelude defines managed C `main` even with `-Dwithout_main`. Missing,
-duplicate or malformed main references fail closed. The receipt binds both
-prelude paths/hashes, the removed bytes/offset and byte-preserving transformation;
-both inputs are rechecked before compilation and at exit. No stdlib is vendored,
+ordinary prelude defines managed C `main` even with `-Dwithout_main`. Crystal
+resolves `--prelude` as a require from the primary source file, so the driver
+passes a path relative to the fixture source directory (not an assumed working
+or repository root). Missing, duplicate or malformed main references fail
+closed. The receipt binds both prelude paths/hashes, the removed bytes/offset
+and byte-preserving transformation; both inputs are rechecked before compilation
+and at exit. No stdlib is vendored,
 no fixture entry ABI changes, and current compilers keep `-Dwithout_main` without
 any prelude rewrite. LLVM audit, static no-import linking and native execution
 remain mandatory on both releases. Overflow-intrinsic admission uses complete

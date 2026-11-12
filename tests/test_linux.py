@@ -334,10 +334,11 @@ class LinuxFloorPreludeTests(unittest.TestCase):
             self.assertEqual(prelude["original_sha256"], hashlib.sha256(self.ORIGINAL).hexdigest())
             self.assertEqual(prelude["generated_sha256"], runner.common.sha256_file(generated))
             self.assertEqual(proof.receipt["compiler"]["stdlib_sha256"][prelude["original_path"]], prelude["original_sha256"])
-            flags = proof.unmanaged_flags()
+            source_directory = proof.root / "spec/native/linux"
+            flags = proof.unmanaged_flags(source_directory / "raw_probe.cr")
             self.assertEqual(flags[:2], ["-Dwithout_main", "--prelude"])
             self.assertTrue(flags[2].startswith(("./", "../")))
-            self.assertEqual((proof.root / flags[2]).resolve(), generated.resolve())
+            self.assertEqual((source_directory / flags[2]).resolve(), generated.resolve())
             self.assertEqual(entry["flags"], flags)
             runner.check_floor_prelude(prelude)
 
@@ -413,7 +414,7 @@ class LinuxFloorPreludeTests(unittest.TestCase):
                     name, command = stage.call_args.args
                     self.assertEqual(name, "compile-" + fixture + "-" + mode)
                     self.assertIn("-Dwithout_main", command)
-                    self.assertEqual((proof.root / command[command.index("--prelude") + 1]).resolve(),
+                    self.assertEqual((Path(command[-3]).parent / command[command.index("--prelude") + 1]).resolve(),
                                      Path(proof.receipt["unmanaged_entry"]["prelude"]["generated_path"]))
                     self.assertNotIn("-O0", command)  # Not a 1.10 option.
                     source = Path(command[-3]).read_text()
@@ -424,7 +425,7 @@ class LinuxFloorPreludeTests(unittest.TestCase):
         with mock.patch.object(runner, "floor_prelude_bytes") as transform:
             proof.prepare_unmanaged_entry(environment)
             transform.assert_not_called()
-        self.assertEqual(proof.unmanaged_flags(), ["-Dwithout_main"])
+        self.assertEqual(proof.unmanaged_flags(ROOT / "spec/native/linux/raw_probe.cr"), ["-Dwithout_main"])
         self.assertEqual(proof.receipt["unmanaged_entry"]["flags"], ["-Dwithout_main"])
         self.assertNotIn("prelude", proof.receipt["unmanaged_entry"])
         self.assertEqual(list(proof.build.iterdir()), [])
@@ -539,7 +540,7 @@ class LinuxInputContracts(unittest.TestCase):
         driver = (ROOT / "scripts/ci/linux_runner.py").read_text()
         self.assertIn('"linux-specs"', driver)
         self.assertIn('int(count[1]) < 11', driver)
-        self.assertIn('"--prelude", crystal_relative_path(prelude, self.root)', driver)
+        self.assertIn('"--prelude", crystal_relative_path(prelude, source.parent)', driver)
         for target in ("x86_64-unknown-linux-gnux32", "aarch64-unknown-linux-gnu_ilp32"):
             self.assertIn(target, driver)
 
@@ -712,7 +713,7 @@ class LinuxRefusalTests(unittest.TestCase):
         self.proof = runner.Runner(proof_args(Path(self.temp.name) / "proof"))
         self.proof.compiler = "fixture-compiler"
 
-    def test_prelude_is_relative_to_cwd_and_require_to_external_source(self):
+    def test_prelude_and_require_paths_resolve_from_the_primary_source_directory(self):
         commands = []
 
         def stage(name, command, **options):
@@ -721,7 +722,7 @@ class LinuxRefusalTests(unittest.TestCase):
             entry = json.loads(source.read_text().removeprefix("require ").strip())
             self.assertTrue(prelude.startswith(("./", "../")))
             self.assertTrue(entry.startswith(("./", "../")))
-            self.assertEqual((self.proof.root / prelude).resolve(), (self.proof.build / "refusal-prelude.cr").resolve())
+            self.assertEqual((source.parent / prelude).resolve(), (self.proof.build / "refusal-prelude.cr").resolve())
             resolved = (source.parent / (entry + ".cr")).resolve()
             self.assertTrue(resolved.is_file(), resolved)
             self.assertTrue(resolved.is_relative_to(ROOT / "src"))
