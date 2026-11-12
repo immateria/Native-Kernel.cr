@@ -392,6 +392,7 @@ class Runner:
         self.cc = shlex.split(args.cc)
         if not self.cc:
             raise ProofError("Select a nonempty C compiler command")
+        self.llvm_mc = None
         self.receipt = {
             "schema": 1, "status": "incomplete", "qualification": "incomplete",
             "mode": "cross-compile-only" if self.cross else "native",
@@ -631,6 +632,26 @@ class Runner:
                 raise ProofError("Unsupported direct require did not refuse explicitly: " + name)
             result.update(status="passed", expected_rejection=True)
 
+    def assembly_command(self, sectioned, obj, triple):
+        if self.version != "1.10.0":
+            return self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)]
+        if not self.llvm_mc:
+            candidate = shutil.which("llvm-mc-14")
+            if not candidate or not Path(candidate).is_file():
+                raise ProofError("Crystal 1.10.0 assembly requires the matching LLVM 14 integrated assembler")
+            path = str(Path(candidate).resolve())
+            result = self.stage("identity-llvm-mc-14", [path, "--version"], timeout=20)
+            match = re.search(r"\bLLVM version (\d+(?:\.\d+)*)", result["stdout"])
+            if not match or match[1].split(".", 1)[0] != "14":
+                raise ProofError("The floor assembly tool must be LLVM MC major version 14")
+            self.llvm_mc = path
+            self.receipt.setdefault("tools", {})["llvm_mc_14"] = {"path": path, "sha256": common.sha256_file(path)}
+            self.receipt["assembly_tool"] = {"name": "llvm-mc-14", "path": path,
+                                              "version": match[1],
+                                              "reason": "The floor compiler emits escaped quoted local symbols that GNU as misparses"}
+            self.write()
+        return [self.llvm_mc, "-filetype=obj", "-triple=" + triple, str(sectioned), "-o", str(obj)]
+
     def build_probe(self, fixture, optimization, auditor):
         name = fixture + "-" + optimization
         artifact = self.build / name
@@ -670,7 +691,7 @@ class Runner:
             with gzip.open(self.export / (name + suffix), "wb") as stream:
                 stream.write(path.read_bytes())
         obj = Path(str(artifact) + ".sections.o")
-        self.stage("assemble-" + name, self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)])
+        self.stage("assemble-" + name, self.assembly_command(sectioned, obj, triple[1]))
         record["object_sections"] = elf_object_sections(obj, self.architecture, len(functions))
         common.write_json(self.export / (name + ".object-sections.json"), record["object_sections"])
         self.write()
@@ -822,7 +843,7 @@ def receipt_review(path):
     serialized = Path(path).read_bytes()
     receipt = json.loads(serialized)
     fields = ("status", "qualification", "mode", "architecture", "expected_compiler", "git_head", "git_branch",
-              "host", "source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged", "tools", "tools_scope",
+              "host", "source_unchanged", "tool_inputs_unchanged", "compiler_inputs_unchanged", "tools", "tools_scope", "assembly_tool",
               "spec_examples", "linux_spec_examples", "cases", "unproduced_artifacts", "final_adopted_children",
               "unmanaged_entry", "limits", "reason", "workflow")
     review = {key: receipt.get(key) for key in fields}
@@ -847,6 +868,8 @@ def receipt_review(path):
         if stage["status"] != "passed":
             record.update(stdout_tail=stage["stdout"][-1024:], stderr_tail=stage["stderr"][-1024:])
             if not diagnostic_stage_emitted:
+                if "command" in stage:
+                    record["command"] = stage["command"]
                 record.update(stdout_head=stage["stdout"][:1024], stderr_head=stage["stderr"][:1024],
                               stdout_error_lines=[line[:256] for line in stage["stdout"].splitlines()
                                                   if re.search(r"(?:error|fatal|undefined reference|cannot|failed)", line, re.I)][-4:],

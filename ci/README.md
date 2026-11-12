@@ -151,6 +151,11 @@ native official 1.22.2 bootstrap, then builds/installs official source commit
 The bootstrap script retains compiler/source hashes. It must actually produce
 and run native 1.10.0 before the driver will accept the cell. A bootstrap error
 is a failed/incomplete cell, not a substituted compiler or successful skip.
+The 1.10.0 assembly printer emits escaped quoted local symbols that Ubuntu's
+GNU assembler misparses; floor artifacts are therefore assembled by matching
+`llvm-mc-14`. Its version and binary hash are recorded and rechecked. The
+1.22.2 path keeps the system C driver's assembler. Both paths assemble the
+same layout-only text; no emitted instruction or symbol is rewritten.
 
 For unmanaged 1.10.0 builds, the driver derives an external build-local prelude
 from the first `prelude.cr` selected by that exact compiler's `CRYSTAL_PATH`.

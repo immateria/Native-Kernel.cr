@@ -497,6 +497,50 @@ class LinuxFloorPreludeTests(unittest.TestCase):
         self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
 
 
+class LinuxAssemblyToolTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="nk-linux-assembler-")
+        self.addCleanup(self.temp.cleanup)
+        self.proof = runner.Runner(proof_args(Path(self.temp.name) / "proof"))
+        self.proof.compiler, self.proof.version = "fixture-compiler", "1.10.0"
+        self.tool = Path(self.temp.name) / "llvm-mc-14"
+        self.tool.write_bytes(b"fixture LLVM MC 14 executable")
+
+    def test_floor_uses_versioned_hash_recorded_llvm_mc_with_emitted_triple(self):
+        def stage(name, command, **options):
+            self.assertEqual(name, "identity-llvm-mc-14")
+            self.assertEqual(command, [str(self.tool.resolve()), "--version"])
+            self.assertEqual(options["timeout"], 20)
+            return stage_result(stdout="Debian LLVM version 14.0.6\\n")
+
+        with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
+                mock.patch.object(self.proof, "stage", side_effect=stage):
+            command = self.proof.assembly_command("floor.sections.s", "floor.sections.o", "aarch64-unknown-linux-gnu")
+        self.assertEqual(command, [str(self.tool.resolve()), "-filetype=obj", "-triple=aarch64-unknown-linux-gnu",
+                                   "floor.sections.s", "-o", "floor.sections.o"])
+        self.assertEqual(self.proof.receipt["tools"]["llvm_mc_14"], {
+            "path": str(self.tool.resolve()), "sha256": hashlib.sha256(self.tool.read_bytes()).hexdigest()})
+        self.assertEqual(self.proof.receipt["assembly_tool"]["version"], "14.0.6")
+        self.assertEqual(self.proof.llvm_mc, str(self.tool.resolve()))
+        self.proof.write()
+        review = runner.receipt_review(self.proof.export / "receipt.json")
+        self.assertEqual(review["assembly_tool"], self.proof.receipt["assembly_tool"])
+
+    def test_floor_requires_llvm_14_and_later_release_keeps_cc_assembler(self):
+        with mock.patch.object(runner.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(runner.ProofError, "requires the matching LLVM 14"):
+                self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+        with mock.patch.object(runner.shutil, "which", return_value=str(self.tool)), \
+                mock.patch.object(self.proof, "stage", return_value=stage_result(stdout="LLVM version 15.0.7\\n")):
+            with self.assertRaisesRegex(runner.ProofError, "major version 14"):
+                self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+        self.proof.version = "1.22.2"
+        with mock.patch.object(runner.shutil, "which") as which:
+            command = self.proof.assembly_command("input.s", "output.o", "x86_64-unknown-linux-gnu")
+        which.assert_not_called()
+        self.assertEqual(command, ["cc", "-c", "-x", "assembler", "input.s", "-o", "output.o"])
+
+
 class LinuxFunctionSectionsTests(unittest.TestCase):
     def test_preserves_every_original_assembly_line_and_instruction(self):
         for architecture, marker in (("x86_64", "@"), ("aarch64", "%")):
