@@ -8,13 +8,15 @@ publication remote is https://github.com/immateria/Native-Kernel.cr.git.
 
 Read [README.md](README.md) and [docs/support.md](docs/support.md) before changing
 the ABI. `make check` checks formatting, runs specs and, on Darwin, builds and
-runs the unmanaged native probe. `make native RECEIPTS=/external/new-directory`
+runs the unmanaged native probe. Linux now dispatches to its separate ELF
+runner; see docs/linux-process.md and docs/linux-validation.md before changing
+that ABI or claiming native support. `make native RECEIPTS=/external/new-directory`
 keeps source-bound receipts at a chosen location. Set `CRYSTAL` to the compiler
 running each command and use a distinct external `CRYSTAL_CACHE_DIR` per run.
 Scratch copies, receipts, object files and executables stay outside this tree.
 
-`darwin/raw` and `darwin` must work without Crystal managed initialization,
-allocation, exceptions, runtime state or external function calls. Never require
+`darwin/raw`, `darwin`, `linux/raw` and `linux` must work without Crystal managed
+initialization, allocation, exceptions, runtime state or external function calls. Never require
 `source` or `audit` from them. Those two managed build metadata entries remain
 portable, including on platforms that refuse raw execution. Update the explicit
 source list in `source.cr` whenever a shipped source is added or removed; its
@@ -46,3 +48,12 @@ Native cells and macOS-15-built forward replays are separate evidence. CI must
 refuse translation; `--allow-translation` belongs only to local trials. An absent
 or incomplete receipt cannot qualify a candidate profile. Keep setup/build
 outputs external, preserve failure uploads and do not mask driver exit status.
+
+Linux uses its own signed single-word result and exact per-architecture assembly
+admission. Never union its templates with Darwin ASSEMBLY, change Darwin errno
+normalization, use libc signal-set sizes for ppoll or omit raw waitid's fifth
+rusage slot. Linux copyout faults may follow reaping. Keep caller ownership,
+raw mutable timeouts and native resource units explicit. No managed launch,
+signal-handler/restorer or consumer policy belongs in this layer. The Linux
+runner's C oracles and cross-only output are not Crystal native proof; retain
+blocked/unrun states and source-bound receipts rather than broad skips.

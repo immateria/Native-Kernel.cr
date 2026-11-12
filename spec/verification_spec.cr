@@ -60,3 +60,33 @@ describe Native::Kernel::Verification do
     end
   end
 end
+
+describe "exact Linux assembly admission" do
+  it "admits only the separately selected OS and architecture template" do
+    profiles = [Native::Kernel::Audit::ASSEMBLY, Native::Kernel::Audit::LINUX_X86_64_ASSEMBLY, Native::Kernel::Audit::LINUX_AARCH64_ASSEMBLY]
+    profiles.each_with_index do |keys, selected|
+      instruction, constraints = keys.last.split('\0')
+      ir = "define i32 @main() {\n  %x = call i64 asm sideeffect \"#{instruction}\", \"#{constraints}\"()\n  ret i32 0\n}\n"
+      profiles.each_with_index do |admitted, profile|
+        if selected == profile
+          Native::Kernel::Verification.verify(ir, assembly: admitted.to_set)
+        else
+          expect_raises(ArgumentError, /indirect or unrecognized/) do
+            Native::Kernel::Verification.verify(ir, assembly: admitted.to_set)
+          end
+        end
+      end
+    end
+  end
+
+  it "rejects all source-bound Linux negative fixtures under either Linux profile" do
+    root = Native::Kernel::Source.root
+    files = Dir.glob(File.join(root, "spec/native/linux/rejections/*.ll"))
+    files.size.should eq(4)
+    [Native::Kernel::Audit::LINUX_X86_64_ASSEMBLY, Native::Kernel::Audit::LINUX_AARCH64_ASSEMBLY].each do |keys|
+      files.each do |file|
+        expect_raises(ArgumentError) { Native::Kernel::Verification.verify(File.read(file), assembly: keys.to_set) }
+      end
+    end
+  end
+end

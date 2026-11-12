@@ -1,0 +1,580 @@
+#!/usr/bin/env python3
+"""Source-bound Linux mechanisms proof. Standard library only; no consumer policy.
+
+No C oracle, cross build or kernel version substitutes for executing the audited
+Crystal artifacts. A passed mechanisms run still leaves the listed qualification
+limits (notably genuinely delivered EINTR) explicit in its receipt.
+"""
+import argparse
+import ctypes
+from datetime import datetime, timezone
+import gzip
+import importlib.util
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shlex
+import shutil
+import signal
+import struct
+import sys
+import time
+
+# Reuse the reviewed bounded capture/leader reservation, not Darwin admission.
+_COMMON_SPEC = importlib.util.spec_from_file_location("nk_bounded_runner", Path(__file__).with_name("runner.py"))
+common = importlib.util.module_from_spec(_COMMON_SPEC)
+_COMMON_SPEC.loader.exec_module(common)
+ROOT = Path(__file__).resolve().parents[2]
+ARCHITECTURES = {"x86_64": 62, "aarch64": 183}
+CASES = ("descriptor", "exec", "process", "pidfd", "poll", "collection", "signal-status", "copyout", "resource", "leaks")
+
+
+class ProofError(Exception):
+    pass
+
+
+def source_identity(root):
+    sources = common.source_identity(root)
+    for path in (Path(root) / "docs").glob("linux*.md"):
+        sources[path.relative_to(root).as_posix()] = common.sha256_file(path)
+    for name in ("README.md", "docs/support.md", "ci/README.md"):
+        sources[name] = common.sha256_file(Path(root) / name)
+    return dict(sorted(sources.items()))
+
+
+def elf_identity(path, architecture, *, executable=True):
+    """Read ELF identity/segments directly; readelf/nm evidence is also retained."""
+    data = Path(path).read_bytes()
+    if len(data) < 64 or data[:7] != b"\x7fELF\x02\x01\x01":
+        raise ProofError("Expected little-endian ELF64")
+    kind, machine = struct.unpack_from("<HH", data, 16)
+    if machine != ARCHITECTURES[architecture] or kind != (2 if executable else 1):
+        raise ProofError("ELF machine/type differs from selected profile")
+    entry, phoff, shoff = struct.unpack_from("<QQQ", data, 24)
+    phsize, phnum, shsize, shnum, names_index = struct.unpack_from("<HHHHH", data, 54)
+    if not executable:
+        return {"architecture": architecture, "machine": machine, "type": kind}
+    if phnum == 0 or phsize != 56 or phnum > 128 or phoff + phnum * phsize > len(data):
+        raise ProofError("Invalid ELF program table")
+    entry_in_code = False
+    for index in range(phnum):
+        start = phoff + index * phsize
+        segment, flags, offset, address, physical, filesz, memsz, alignment = struct.unpack_from("<IIQQQQQQ", data, start)
+        if segment in (2, 3):
+            raise ProofError("Standalone ELF has a dynamic segment or interpreter")
+        if offset + filesz > len(data) or filesz > memsz:
+            raise ProofError("Invalid ELF segment extent")
+        if segment == 1 and flags & 1 and address <= entry < address + memsz:
+            entry_in_code = True
+        if segment in (1, 0x6474e551) and flags & 1 and flags & 2:
+            raise ProofError("Writable executable segment/stack")
+    if not entry_in_code:
+        raise ProofError("ELF entry is not in an executable load segment")
+    if shsize != 64 or not (0 < names_index < shnum < 65535) or shoff + shnum * shsize > len(data):
+        raise ProofError("Invalid ELF section table")
+    name_offset, name_size = struct.unpack_from("<QQ", data, shoff + names_index * shsize + 24)
+    if name_offset + name_size > len(data):
+        raise ProofError("Invalid ELF section names")
+    names = data[name_offset:name_offset + name_size]
+    for index in range(shnum):
+        section = shoff + index * shsize
+        name = struct.unpack_from("<I", data, section)[0]
+        size = struct.unpack_from("<Q", data, section + 32)[0]
+        label = names[name:].split(b"\0", 1)[0]
+        if size and label in (b".init_array", b".fini_array", b".preinit_array", b".ctors", b".dtors"):
+            raise ProofError("ELF contains initialization/finalization arrays")
+    return {"architecture": architecture, "machine": machine, "type": kind, "entry": entry,
+            "interpreter": False, "dynamic_segment": False, "initializers": False}
+
+
+def function_sections(assembly, architecture):
+    """Give each compiler-emitted ELF function its own GC section.
+
+    Crystal's O0 single-module object otherwise shares .text with unused runtime
+    helpers. Preserve EVERY original assembly line/instruction and add only a
+    section switch/alignment before a complete .type ... function / .size pair.
+    Audit the unmodified emitted LLVM first; never prune functions or imports to
+    make that audit pass. This is a layout-only, source-bound build step, not a
+    second compiler, IR filter, unmanaged API dependency or audit exemption.
+    """
+    marker = "@" if architecture == "x86_64" else "%"
+    result, functions, active, labeled = [], [], None, False
+    for line in assembly.splitlines(keepends=True):
+        if re.match(r'^\s*\.section\s+\.debug_', line):
+            raise ProofError("Function-section assembly requires the --no-debug build")
+        match = re.match(r'^\s*\.type\s+(.+?),\s*[@%]function\s*(?:[#/].*)?$', line)
+        if match:
+            symbol = match[1].strip()
+            if active or symbol in functions:
+                raise ProofError("Incomplete/duplicate emitted assembly function")
+            active, labeled = symbol, False
+            result.append('.section .text.nk.' + str(len(functions)) + ',"ax",' + marker + 'progbits\n.p2align 4\n')
+            functions.append(symbol)
+        elif active:
+            if re.match(r'^\s*\.(?:section|text|pushsection|popsection)\b', line):
+                raise ProofError("Unexpected emitted section switch inside a function")
+            if re.match(r'^\s*' + re.escape(active) + r':\s*(?:(?:#|//).*)?$', line):
+                labeled = True
+            if re.match(r'^\s*\.size\s+' + re.escape(active) + r'\s*,', line):
+                if not labeled:
+                    raise ProofError("Emitted assembly function lacks its label")
+                active = None
+        result.append(line)
+    if active or not functions:
+        raise ProofError("Emitted assembly lacks complete ELF functions")
+    return "".join(result), functions
+
+
+def validate_native_host(architecture):
+    actual = platform.machine()
+    if platform.system() != "Linux" or actual != architecture or struct.calcsize("P") != 8:
+        raise ProofError("Native execution requires matching non-Android Linux LP64")
+    if hasattr(sys, "getandroidapilevel") or os.environ.get("ANDROID_ROOT"):
+        raise ProofError("Android is not admitted")
+    expected_runner = "X64" if architecture == "x86_64" else "ARM64"
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ARCH") != expected_runner:
+        raise ProofError("Runner architecture differs from the native profile")
+    if any(name.startswith("QEMU_") for name in os.environ):
+        raise ProofError("Emulated execution cannot qualify a native profile")
+    maps = Path("/proc/self/maps").read_text()
+    if re.search(r"qemu|box64|FEXInterpreter", maps, re.I):
+        raise ProofError("Translated execution cannot qualify a native profile")
+    cpu = Path("/proc/cpuinfo").read_text()
+    # Distinguish a native hosted architecture from a user-mode emulator's uname.
+    if architecture == "x86_64" and not re.search(r"^flags\s*:", cpu, re.M):
+        raise ProofError("Cannot establish x86-64 CPU profile")
+    if architecture == "aarch64" and not re.search(r"^CPU implementer\s*:", cpu, re.M):
+        raise ProofError("Cannot establish AArch64 CPU profile")
+
+
+def header_hashes(dependency_file, root=ROOT):
+    content = Path(dependency_file).read_text().replace("\\\n", " ")
+    dependencies = shlex.split(content.split(":", 1)[1])
+    paths = [Path(name) if Path(name).is_absolute() else Path(root) / name for name in dependencies]
+    return {str(path.resolve()): common.sha256_file(path) for path in paths}
+
+
+def enable_subreaper():
+    # Driver-only failure containment. Not part of either raw or typed API.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise ProofError("Cannot establish exclusive orphan cleanup: errno " + str(ctypes.get_errno()))
+
+
+def cleanup_adopted_children():
+    """The driver exclusively collects fixture orphans, never arbitrary PIDs."""
+    path = Path(f"/proc/self/task/{os.getpid()}/children")
+    adopted, deadline = [], time.monotonic() + 3
+    while True:
+        children = [int(pid) for pid in path.read_text().split()]
+        if not children:
+            return adopted
+        for pid in children:
+            # Still our unreaped child; no competing waiter or failed-creation PID.
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            got, status = os.waitpid(pid, os.WNOHANG)
+            if got:
+                adopted.append({"pid": pid, "status": status})
+        if time.monotonic() >= deadline:
+            raise ProofError("Fixture child cleanup exceeded its deadline")
+        time.sleep(0.001)
+
+
+class Runner:
+    def __init__(self, args, root=ROOT):
+        self.args, self.root = args, Path(root).resolve()
+        self.output = Path(args.output).expanduser().resolve()
+        if self.output == self.root or self.output.is_relative_to(self.root):
+            raise ProofError("Evidence/cache/build directory must be outside the repository")
+        if self.output.exists():
+            raise ProofError("Choose a new evidence directory")
+        self.export = self.output / "export"
+        self.export.mkdir(parents=True)
+        self.logs = self.export / "logs"
+        self.logs.mkdir()
+        self.build = self.output / "build"
+        self.build.mkdir()
+        self.host_arch = platform.machine()
+        self.architecture = args.cross_target or args.architecture or self.host_arch
+        self.cross = bool(args.cross_target)
+        self.config = json.loads((self.root / "ci/linux.json").read_text())
+        if tuple(self.config["cases"]) != CASES or self.architecture not in ARCHITECTURES:
+            raise ProofError("Invalid Linux case/architecture selection")
+        self.env = dict(os.environ, CRYSTAL_CACHE_DIR=str(self.output / "cache"),
+                        PYTHONDONTWRITEBYTECODE="1", NK_ELF_PROOF="stack-arguments")
+        self.cc = shlex.split(args.cc)
+        if not self.cc:
+            raise ProofError("Select a nonempty C compiler command")
+        self.receipt = {
+            "schema": 1, "status": "incomplete", "qualification": "incomplete",
+            "mode": "cross-compile-only" if self.cross else "native",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "source_before": source_identity(self.root), "stages": [], "cases": [], "artifacts": {},
+            "host": {"system": platform.system(), "architecture": self.host_arch,
+                     "kernel": platform.release(), "version": platform.version(),
+                     "os_release": Path("/etc/os-release").read_text() if Path("/etc/os-release").exists() else None,
+                     "proc_status": Path("/proc/self/status").read_text() if Path("/proc/self/status").exists() else None},
+            "architecture": self.architecture, "limits": self.config["limits"],
+            "expected_compiler": args.expected_compiler,
+            "configuration": self.config,
+            "workflow": {key: value for key, value in os.environ.items() if key in
+                         ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_REPOSITORY", "RUNNER_ARCH", "RUNNER_OS", "ImageOS", "ImageVersion")}}
+        self.write()
+
+    def write(self):
+        common.write_json(self.export / "receipt.json", self.receipt)
+
+    def stage(self, name, command, *, timeout=300, require=True):
+        result = common.run_bounded(command, self.logs / name, timeout=timeout, cwd=self.root, env=self.env)
+        result["name"] = name
+        if result["output_truncated"]:
+            result["status"] = "failed"
+            result["reason"] = "Output exceeded the 64-KiB per-stream capture bound"
+        self.receipt["stages"].append(result)
+        self.write()
+        if require and result["status"] != "passed":
+            raise ProofError("Stage failed: " + name)
+        return result
+
+    def artifact(self, name, path, *, ir=None, obj=None):
+        record = {"sha256": common.sha256_file(path), "path": str(path),
+                  "execution": "unrun"}
+        if ir:
+            record["llvm_sha256"] = common.sha256_file(ir)
+            with gzip.open(self.export / (name + ".ll.gz"), "wb") as stream:
+                stream.write(Path(ir).read_bytes())
+        if obj:
+            record["object_sha256"] = common.sha256_file(obj)
+        self.receipt["artifacts"][name] = record
+        shutil.copy2(path, self.export / name)
+        self.write()
+        return record
+
+    def inspect(self, name, path):
+        identity = elf_identity(path, self.architecture)
+        self.stage("readelf-" + name, ["readelf", "-h", "-l", "-d", "-S", "-W", str(path)])
+        imports = self.stage("imports-" + name, ["nm", "-u", str(path)])
+        if imports["stdout"].strip() or imports["stderr"].strip():
+            raise ProofError("Standalone executable has undefined imports")
+        symbols = self.stage("symbols-" + name, ["nm", "--defined-only", str(path)])
+        start = re.search(r"^([0-9a-f]+) T _start$", symbols["stdout"], re.M)
+        if not start or int(start[1], 16) != identity["entry"]:
+            raise ProofError("ELF e_entry does not designate the original _start")
+        if re.search(r"\b(?:__crystal_|GC_|__cxa|__gxx|_Unwind|__libc)", symbols["stdout"]):
+            raise ProofError("Standalone executable retains Crystal/managed initialization or runtime")
+        if not self.cross:
+            self.stage("disassemble-entry-" + name, ["objdump", "--disassemble=_start", str(path)])
+        return identity
+
+    def oracles(self):
+        self.stage("identity-uname", ["uname", "-a"], timeout=20)
+        self.receipt["git_head"] = self.stage("identity-git-head", ["git", "rev-parse", "HEAD"], timeout=20)["stdout"].strip()
+        self.receipt["git_branch"] = self.stage("identity-git-branch", ["git", "branch", "--show-current"], timeout=20)["stdout"].strip()
+        self.stage("identity-cc", self.cc + ["--version"], timeout=20)
+        self.stage("identity-ld", ["ld", "--version"], timeout=20)
+        self.stage("identity-readelf", ["readelf", "--version"], timeout=20)
+        self.stage("identity-nm", ["nm", "--version"], timeout=20)
+        tools = {"cc_driver": self.cc[0], "ld": "ld", "readelf": "readelf", "nm": "nm"}
+        if not self.cross:
+            tools["objdump"] = "objdump"
+        self.receipt["tools"] = {}
+        for name, command in tools.items():
+            path = Path(shutil.which(command) or command).resolve()
+            self.receipt["tools"][name] = {"path": str(path), "sha256": common.sha256_file(path)}
+        self.receipt["tools_scope"] = "selected driver/tool binaries, not every SDK/shared-library/linker input"
+        dependency = self.build / "layout.d"
+        oracle = self.build / ("layout.o" if self.cross else "layout")
+        flags = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-MD", "-MF", str(dependency)]
+        if self.cross:
+            flags += ["-DNK_LAYOUT_ONLY", "-c"]
+        self.stage("compile-layout", self.cc + flags + ["scripts/ci/linux-layout.c", "-o", str(oracle)])
+        self.receipt["layout_oracle"] = {"headers": "installed UAPI, not pinned Linux v6.6 headers",
+                                         "header_sha256": header_hashes(dependency, self.root), "object_or_executable_sha256": common.sha256_file(oracle)}
+        if not self.cross:
+            self.stage("execute-layout", [str(oracle)], timeout=10)
+            capabilities = self.build / "capabilities"
+            self.stage("compile-capabilities", self.cc + ["-std=c11", "-Wall", "-Wextra", "-Werror", "scripts/ci/linux-capabilities.c", "-o", str(capabilities)])
+            result = self.stage("execute-capabilities", [str(capabilities)], timeout=10)
+            self.receipt["capabilities"] = {"scope": "libc C diagnostic, not Crystal native proof", "observed": json.loads(result["stdout"])}
+        startup = self.root / ("spec/native/linux/start-" + self.architecture + ".S")
+        self.receipt["startup"] = {"source_path": startup.relative_to(self.root).as_posix(),
+                                   "source_bytes": startup.read_text(), "sha256": common.sha256_file(startup)}
+        start = self.build / "start.o"
+        self.stage("assemble-start", self.cc + ["-c", str(startup), "-o", str(start)])
+        elf_identity(start, self.architecture, executable=False)
+        self.receipt["startup"]["object_sha256"] = common.sha256_file(start)
+        c_object, c_program = self.build / "start-check.o", self.build / "start-check"
+        self.stage("compile-startup-oracle", self.cc + ["-c", "-ffreestanding", "-fno-stack-protector", "-fno-pie", "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra", "-Werror", "spec/native/linux/start_check.c", "-o", str(c_object)])
+        self.link("startup-oracle", c_object, c_program)
+        c_elf = self.inspect("startup-oracle", c_program)
+        artifact = self.artifact("startup-oracle", c_program, obj=c_object)
+        artifact["identity"] = c_elf
+        artifact["scope"] = "C startup-only; NOT Crystal unmanaged proof"
+        if not self.cross:
+            self.stage("execute-startup-oracle", [str(c_program), "startup", "ELF-argument", "ignored"], timeout=10)
+            artifact["execution"] = "native-startup-only-passed"
+        self.write()
+
+    def link(self, name, obj, program):
+        self.stage("link-" + name, self.cc + ["-nostdlib", "-static", "-no-pie", "-Wl,--gc-sections,--build-id=none,-e,_start",
+                                            str(self.build / "start.o"), str(obj), "-o", str(program)])
+
+    def identify_compiler(self):
+        compiler = shutil.which(self.args.compiler) if "/" not in self.args.compiler else self.args.compiler
+        if not compiler or not Path(compiler).is_file():
+            self.receipt["status"] = "blocked"
+            raise ProofError("Exact Crystal compiler unavailable: " + self.args.compiler)
+        compiler = str(Path(compiler).resolve())
+        result = self.stage("identity-compiler", [compiler, "--version"], timeout=20)
+        version, target = common.compiler_version(result["stdout"])
+        if version not in self.config["compilers"] or (self.args.expected_compiler and self.args.expected_compiler != version):
+            raise ProofError("Compiler must match the exact reviewed release")
+        if not target.startswith(self.host_arch + "-") or not re.search(r"linux-(?:gnu|musl)$", target):
+            raise ProofError("Compiler default target must be native non-Android LP64 Linux")
+        # Official Linux archives contain a direct ELF executable. An arbitrary
+        # launcher is not identified merely by trusting its --version output.
+        binary = Path(compiler).read_bytes()
+        if len(binary) < 64 or binary[:7] != b"\x7fELF\x02\x01\x01" or struct.unpack_from("<H", binary, 18)[0] != ARCHITECTURES[self.host_arch]:
+            raise ProofError("Select the actual native ELF Crystal binary, not a wrapper")
+        self.receipt["compiler"] = {"path": compiler, "sha256": common.sha256_file(compiler), "version": version,
+                                    "default_target": target, "description": result["stdout"],
+                                    "identity_scope": "compiler ELF and selected stdlib (not all SDK/linker inputs)"}
+        self.env["CRYSTAL"] = compiler
+        environment = self.stage("compiler-env", [compiler, "env"], timeout=20)
+        self.receipt["compiler"]["environment"] = environment["stdout"]
+        # Hash the selected standard-library tree, if its default path is exposed.
+        match = re.search(r'^CRYSTAL_PATH="([^"]*)"', environment["stdout"], re.M)
+        if match:
+            paths = match[1].split(":")
+            self.receipt["compiler"]["stdlib_sha256"] = {
+                str(p): common.sha256_file(p) for directory in paths if Path(directory).is_dir()
+                for p in sorted(Path(directory).rglob("*.cr"))}
+        if not self.receipt["compiler"].get("stdlib_sha256"):
+            raise ProofError("Cannot identify the selected Crystal standard-library sources")
+        self.compiler, self.version = compiler, version
+
+    def rejection_tests(self, auditor):
+        reasons = {"external": "unapproved symbol write", "mutable": "mutable global", "incorrect": "indirect or unrecognized", "darwin": "indirect or unrecognized"}
+        for architecture in ARCHITECTURES:
+            for fixture, reason in reasons.items():
+                result = self.stage("reject-" + architecture + "-" + fixture,
+                                    [str(auditor), str(self.root / ("spec/native/linux/rejections/" + fixture + ".ll")), "linux-" + architecture], require=False)
+                if result["exit_code"] != 1 or reason not in result["stdout"] + result["stderr"] or result["output_truncated"]:
+                    raise ProofError("Negative auditor fixture did not reject for its intended reason")
+                result["expected_rejection"] = True
+                result["status"] = "passed"
+        # Actual opposite-architecture Linux keys must not enter either profile.
+        for architecture, other in (("x86_64", "aarch64"), ("aarch64", "x86_64")):
+            key = ("svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory},~{cc}") if other == "aarch64" else ("syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory},~{flags}")
+            path = self.build / ("opposite-" + architecture + ".ll")
+            path.write_text('define i32 @main() {\n  %r = call i64 asm sideeffect "' + key[0] + '", "' + key[1] + '"()\n  ret i32 0\n}\n')
+            result = self.stage("reject-opposite-" + architecture, [str(auditor), str(path), "linux-" + architecture], require=False)
+            if result["exit_code"] != 1 or "indirect or unrecognized" not in result["stderr"] + result["stdout"]:
+                raise ProofError("Auditor admitted opposite-platform assembly")
+            result.update(status="passed", expected_rejection=True)
+
+    def require_refusals(self):
+        # Use a tiny external source, and require a specific refusal diagnostic;
+        # compiler/linker/stdlib crashes cannot count as a successful negative.
+        prelude = self.build / "refusal-prelude.cr"
+        prelude.write_text("# Isolate the entry guard from unsupported target stdlibs.\n")
+        cases = [
+            ("linux-on-darwin", "aarch64-apple-darwin", "native-kernel/linux/raw", "Linux kernel calls require"),
+            ("linux-on-windows", "x86_64-pc-windows-msvc", "native-kernel/linux", "Linux kernel calls require"),
+            ("linux-on-i386", "i386-unknown-linux-gnu", "native-kernel/linux/raw", "Linux kernel calls require"),
+            ("linux-on-android", "aarch64-unknown-linux-android", "native-kernel/linux/raw", "Linux kernel calls require"),
+            ("linux-on-x32", "x86_64-unknown-linux-gnux32", "native-kernel/linux/raw", "Linux kernel calls require"),
+            ("linux-on-arm-ilp32", "aarch64-unknown-linux-gnu_ilp32", "native-kernel/linux/raw", "Linux kernel calls require"),
+            ("darwin-on-linux", "x86_64-unknown-linux-gnu", "native-kernel/darwin/raw", "Darwin kernel calls require"),
+            ("root-still-darwin", "x86_64-unknown-linux-gnu", "native-kernel", "Darwin kernel calls require"),
+        ]
+        for name, target, entry, message in cases:
+            source = self.build / (name + ".cr")
+            source.write_text('require ' + json.dumps(str(self.root / "src" / entry)) + '\n')
+            result = self.stage("refuse-" + name, [self.compiler, "build", "--no-codegen", "--prelude", str(prelude), "--target", target, str(source)], require=False)
+            if result["exit_code"] != 1 or message not in result["stderr"] + result["stdout"]:
+                raise ProofError("Unsupported direct require did not refuse explicitly: " + name)
+            result.update(status="passed", expected_rejection=True)
+
+    def build_probe(self, fixture, optimization, auditor):
+        name = fixture + "-" + optimization
+        artifact = self.build / name
+        record = self.receipt["artifacts"][name] = {"status": "building", "execution": "unrun"}
+        source = self.root / ("spec/native/linux/" + ("raw_probe" if fixture == "raw" else "behavior") + ".cr")
+        flags = [self.compiler, "build", "--cross-compile", "--single-module", "--no-debug", "--error-on-warnings", "-Dwithout_main", "--emit", "llvm-ir,asm"]
+        if self.cross:
+            flags += ["--target", self.config["profiles"][self.architecture]["target"]]
+        if optimization == "release":
+            flags += ["--release"]
+        elif self.version != "1.10.0":
+            flags += ["-O0"]
+        self.stage("compile-" + name, flags + [str(source), "-o", str(artifact)])
+        ir, emitted_obj = Path(str(artifact) + ".ll"), Path(str(artifact) + ".o")
+        assembly = Path(str(artifact) + ".s")
+        record.update(llvm_sha256=common.sha256_file(ir), compiler_object_sha256=common.sha256_file(emitted_obj),
+                      emitted_assembly_sha256=common.sha256_file(assembly), optimization=optimization)
+        self.write()
+        # Retain even rejected IR, not just successful builds.
+        with gzip.open(self.export / (name + ".ll.gz"), "wb") as stream:
+            stream.write(ir.read_bytes())
+        triple = re.search(r'^target triple = "([^"]+)"', ir.read_text(), re.M)
+        if not triple or not triple[1].startswith(self.architecture + "-") or "linux" not in triple[1] or "android" in triple[1]:
+            raise ProofError("Emitted LLVM target differs from the selected Linux architecture")
+        self.stage("audit-" + name, [str(auditor), str(ir), "linux-" + self.architecture])
+        elf_identity(emitted_obj, self.architecture, executable=False)
+        sectioned = Path(str(artifact) + ".sections.s")
+        text, functions = function_sections(assembly.read_text(), self.architecture)
+        sectioned.write_text(text)
+        section_record = {"emitted_assembly_sha256": common.sha256_file(assembly),
+                          "sectioned_assembly_sha256": common.sha256_file(sectioned), "functions": functions,
+                          "operation": "Insert only per-function ELF section/alignment directives; no original lines removed or changed"}
+        record["function_sections"] = section_record
+        self.write()
+        for suffix, path in ((".s.gz", assembly), (".sections.s.gz", sectioned)):
+            with gzip.open(self.export / (name + suffix), "wb") as stream:
+                stream.write(path.read_bytes())
+        obj = Path(str(artifact) + ".sections.o")
+        self.stage("assemble-" + name, self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)])
+        elf_identity(obj, self.architecture, executable=False)
+        self.stage("object-" + name, ["readelf", "-h", "-S", "-W", str(obj)])
+        self.link(name, obj, artifact)
+        identity = self.inspect(name, artifact)
+        emitted_hash = record["compiler_object_sha256"]
+        record = self.artifact(name, artifact, ir=ir, obj=obj)
+        record.update(identity=identity, target=triple[1], optimization=optimization, status="audited-and-linked",
+                      compiler_object_sha256=emitted_hash, function_sections=section_record)
+        return artifact, record
+
+    def runtime(self, artifact, name, optimization, mapping):
+        expected = "NK linux raw passed\n" if name == "raw" else "NK_OK linux " + name + "\n"
+        result = self.stage("execute-" + name + "-" + optimization,
+                            [str(artifact), name, "ELF-argument", str(mapping)], timeout=45 if name == "leaks" else 12, require=False)
+        adopted = cleanup_adopted_children()
+        result["adopted_children"] = adopted
+        complete = result["exit_code"] == 0 and result["stdout"] == expected and result["stderr"] == "" and not result["output_truncated"] and not adopted
+        if not complete:
+            result["status"] = "failed" if result["status"] == "passed" else result["status"]
+        self.receipt["cases"].append({"name": name, "optimization": optimization, "status": result["status"],
+                                      "completion_observed": complete, "adopted_children": adopted})
+        self.write()
+        if not complete:
+            raise ProofError("Native case failed, lacked exact completion, or leaked a child: " + name)
+
+    def run(self):
+        subreaper = False
+        try:
+            if self.args.record_failure:
+                self.receipt["status"] = "blocked"
+                raise ProofError(self.args.record_failure)
+            validate_native_host(self.host_arch if self.cross else self.architecture)
+            if self.cross and self.architecture == self.host_arch:
+                raise ProofError("Cross-only mode must select a different architecture")
+            enable_subreaper()
+            subreaper = True
+            self.receipt["host"]["execution"] = "native Linux caller; no translation admitted"
+            self.oracles()
+            self.identify_compiler()
+            self.stage("python-tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
+            self.stage("format", [self.compiler, "tool", "format", "--check", "src", "spec", "scripts"])
+            if not self.cross:
+                result = self.stage("specs", [self.compiler, "spec", "--error-on-warnings", "--no-color"])
+                examples = re.search(r"(\d+) examples?,", result["stdout"])
+                if not examples or int(examples[1]) < 10:
+                    raise ProofError("Specs did not execute the Linux/portable roster")
+                self.receipt["spec_examples"] = int(examples[1])
+                selected = self.stage("linux-specs", [self.compiler, "spec", "spec/linux_raw_spec.cr", "spec/linux_abi_spec.cr", "--error-on-warnings", "--no-color"])
+                count = re.search(r"(\d+) examples?,", selected["stdout"])
+                if not count or int(count[1]) < 11:
+                    raise ProofError("Linux-specific specs were skipped or did not execute their roster")
+                self.receipt["linux_spec_examples"] = int(count[1])
+            auditor = self.build / "audit"
+            self.stage("build-auditor", [self.compiler, "build", "--single-module", "--error-on-warnings", "scripts/ci/audit.cr", "-o", str(auditor)])
+            self.rejection_tests(auditor)
+            self.require_refusals()
+            mapping = self.build / "mapping-input"
+            mapping.write_bytes(b"\0" * 65536 + b"sixth-slot-nonzero-offset\0" + b"\0" * 4096)
+            self.receipt["mapping_input_sha256"] = common.sha256_file(mapping)
+            # Do not build on a failed raw layer. Both raw optimization gates
+            # complete before instantiating/building the typed behavior layer.
+            for fixture in ("raw", "behavior"):
+                for optimization in ("development", "release"):
+                    artifact, record = self.build_probe(fixture, optimization, auditor)
+                    if not self.cross:
+                        for case in (("raw",) if fixture == "raw" else CASES):
+                            self.runtime(artifact, case, optimization, mapping)
+                        record["execution"] = "native-passed"
+                        record["status"] = "passed"
+            if self.cross:
+                self.receipt["status"] = "cross-compile-only"
+            else:
+                expected = {(case, mode) for case in ("raw",) + CASES for mode in ("development", "release")}
+                observed = {(case["name"], case["optimization"]) for case in self.receipt["cases"] if case["completion_observed"]}
+                if observed != expected:
+                    raise ProofError("Native runtime roster is incomplete")
+                self.receipt["status"] = "mechanisms-passed"
+            # Intentionally NOT "qualified": no genuine EINTR/consumer/PID reuse
+            # claim follows from this roster. Missing compilers never get here.
+        except (ProofError, OSError, ValueError) as error:
+            self.receipt["reason"] = str(error)
+            if self.receipt["status"] != "blocked":
+                self.receipt["status"] = "failed"
+        finally:
+            if subreaper:
+                try:
+                    adopted = cleanup_adopted_children()
+                    self.receipt["final_adopted_children"] = adopted
+                    if adopted:
+                        self.receipt.update(status="failed", reason="Adopted children remained outside runtime cleanup")
+                except (ProofError, OSError) as error:
+                    self.receipt.update(status="failed", reason="Final child cleanup failed: " + str(error))
+            self.receipt["source_after"] = source_identity(self.root)
+            self.receipt["source_unchanged"] = self.receipt["source_before"] == self.receipt["source_after"]
+            if not self.receipt["source_unchanged"]:
+                self.receipt.update(status="failed", reason="Source/build inputs changed during proof")
+            for name, digest in self.receipt.get("layout_oracle", {}).get("header_sha256", {}).items():
+                if not Path(name).is_file() or common.sha256_file(name) != digest:
+                    self.receipt.update(status="failed", reason="C oracle input changed during proof: " + name)
+            tools = self.receipt.get("tools", {})
+            self.receipt["tool_inputs_unchanged"] = all(Path(item["path"]).is_file() and common.sha256_file(item["path"]) == item["sha256"] for item in tools.values()) if tools else None
+            if tools and not self.receipt["tool_inputs_unchanged"]:
+                self.receipt.update(status="failed", reason="Selected build/inspection tool changed during proof")
+            compiler = self.receipt.get("compiler", {})
+            selected = dict(compiler.get("stdlib_sha256", {}))
+            if compiler.get("sha256"):
+                selected[compiler["path"]] = compiler["sha256"]
+            self.receipt["compiler_inputs_unchanged"] = all(Path(path).is_file() and common.sha256_file(path) == digest for path, digest in selected.items()) if selected else None
+            if selected and not self.receipt["compiler_inputs_unchanged"]:
+                self.receipt.update(status="failed", reason="Compiler/stdlib inputs changed during proof")
+            self.receipt["unproduced_artifacts"] = [name + "-" + mode for name in ("raw", "behavior") for mode in ("development", "release") if not self.receipt["artifacts"].get(name + "-" + mode, {}).get("sha256")]
+            self.receipt["completed_at"] = datetime.now(timezone.utc).isoformat()
+            self.write()
+        return 0 if self.receipt["status"] in ("mechanisms-passed", "cross-compile-only") else 1
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compiler", default=os.environ.get("CRYSTAL", "crystal"))
+    parser.add_argument("--expected-compiler", choices=("1.10.0", "1.22.2"))
+    parser.add_argument("--architecture", choices=tuple(ARCHITECTURES))
+    parser.add_argument("--cross-target", choices=tuple(ARCHITECTURES))
+    parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--record-failure")
+    args = parser.parse_args(argv)
+    try:
+        runner = Runner(args)
+        code = runner.run()
+        print(runner.receipt["status"] + ": " + str(runner.export / "receipt.json"))
+        return code
+    except (ProofError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

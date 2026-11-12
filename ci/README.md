@@ -126,3 +126,53 @@ The collection fixture also retains a successful write result across a close
 trap before checking it. Its optimized x86-64 build exposed the former `cc`
 clobber's failure to invalidate LLVM's flags register. The entry and exact audit
 profile now name `flags`; the native case remains a regression for that failure.
+
+
+# Separate Linux mechanisms path
+
+The new [Linux workflow](../.github/workflows/linux.yml) does not modify the
+macOS native/forward jobs. It has four native cells: exact Crystal 1.10.0 and
+1.22.2 on standard public `ubuntu-24.04` x86-64 and `ubuntu-24.04-arm` AArch64.
+All cells are **unrun here**, including the native ARM64 floor bootstrap.
+No runner label, C oracle or cross build qualifies a native Crystal cell.
+The [dated local blocks](../docs/linux-validation.md) and [ABI contracts](
+../docs/linux-process.md) are part of the review boundary.
+
+Actions reuse the immutable checkout/install/upload pins above, `contents: read`,
+no persisted credentials, a public-repository guard, fail-fast false, no
+translation/emulation and three-day retention. Native jobs have a 35-minute
+ceiling. Build/cache/bootstrap paths are external. Failure uploads retain the
+receipt, bounded logs, compressed LLVM and audited executables (not caches or
+reference trees). Interrupted setup gets an explicit incomplete receipt.
+
+Linux 1.10.0's official release has no ARM64 tarball. That cell installs the
+native official 1.22.2 bootstrap, then builds/installs official source commit
+`9c011d77d660a5a7441370dce9e101b3ca094d8b` with LLVM 14 outside the checkout.
+The bootstrap script retains compiler/source hashes. It must actually produce
+and run native 1.10.0 before the driver will accept the cell. A bootstrap error
+is a failed/incomplete cell, not a substituted compiler or successful skip.
+
+Local execution:
+
+```sh
+python3 scripts/ci/linux_runner.py --compiler /tools/crystal/bin/crystal   --expected-compiler 1.22.2 --architecture x86_64 --output /external/new-linux
+# Explicit cross-only builds need a matching cross C assembler/linker:
+python3 scripts/ci/linux_runner.py --compiler /tools/crystal/bin/crystal   --cross-target aarch64 --cc 'aarch64-linux-gnu-gcc' --output /external/new-cross
+```
+
+Both raw modes gate the typed fixtures. Ten typed cases plus the raw case run
+in both modes; every public method is mapped in `ci/linux.json`. Static ELF
+entry/import/dependency checks, independent installed-UAPI C assertions,
+negative LLVM fixtures, unsupported direct requires, exact output markers and
+source hashes before/after are mandatory. A separate Linux-spec example-count
+gate prevents portable-only spec success. After auditing unmodified LLVM, a
+layout-only assembly step inserts per-function ELF sections/alignment for O0
+garbage collection; it preserves every original assembly line and retains both
+compressed texts/hashes and the reassembled object identity. It never removes
+reachable IR or grants extra imports/assembly admission. Raw clone/exec occurs only in
+unmanaged disposable fixtures. Exclusive child cleanup and driver subreaper
+containment are bounded; any adopted child fails the case. `mechanisms-passed`
+still leaves `qualification: incomplete`: genuinely delivered EINTR, consumer
+migration/lifecycle, foreign credentials and PID reuse are not established.
+Synthetic EINTR decoding is labeled separately, never promoted to native
+interruption qualification. See the receipts, not the existence of this config.

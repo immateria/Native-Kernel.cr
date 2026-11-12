@@ -1,0 +1,97 @@
+name: Native Linux mechanisms
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-kernel-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    if: ${{ github.event.repository.visibility == 'public' }}
+    name: Linux ${{ matrix.architecture }} / Crystal ${{ matrix.compiler }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        compiler: ['1.10.0', '1.22.2']
+        architecture: [x86_64, aarch64]
+        include:
+          - architecture: x86_64
+            runner: ubuntu-24.04
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+    env:
+      NK_OUTPUT: /tmp/nk-linux-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.architecture }}-${{ matrix.compiler }}
+      CRYSTAL_CACHE_DIR: /tmp/nk-linux-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.architecture }}-${{ matrix.compiler }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install native build dependencies
+        id: dependencies
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/nk-linux-setup.log"
+          sudo apt-get install -y gcc g++ make git binutils pkg-config libgc-dev libevent-dev libgmp-dev libssl-dev libpcre3-dev libpcre2-dev llvm-14-dev 2>&1 | tee -a "$RUNNER_TEMP/nk-linux-setup.log"
+      - name: Install exact official compiler or native bootstrap
+        id: compiler-install
+        timeout-minutes: 8
+        uses: crystal-lang/install-crystal@36a22e9145188eec527c96e5a789ce4b832af587 # v1
+        with:
+          crystal: ${{ matrix.architecture == 'aarch64' && matrix.compiler == '1.10.0' && '1.22.2' || matrix.compiler }}
+          arch: ${{ matrix.architecture }}
+          shards: false
+      - name: Bootstrap floor natively from its immutable official source
+        id: floor-bootstrap
+        if: ${{ matrix.architecture == 'aarch64' && matrix.compiler == '1.10.0' }}
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/linux-floor-arm64.sh "$RUNNER_TEMP/nk-floor-arm64" 2>&1 | tee -a "$RUNNER_TEMP/nk-linux-setup.log"
+      - name: Run source-bound native mechanisms proof
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/linux_runner.py --compiler "$(command -v crystal)" --expected-compiler '${{ matrix.compiler }}' --architecture '${{ matrix.architecture }}' --output "$NK_OUTPUT"
+      - name: Preserve incomplete receipt and setup evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          fallback=0
+          if [[ ! -f "$NK_OUTPUT/export/receipt.json" ]]; then
+            fallback=1
+            mkdir -p "$NK_OUTPUT/export"
+            python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["NK_OUTPUT"])/"export/receipt.json"; p.write_text(json.dumps({"status":"incomplete","qualification":"incomplete","reason":"Workflow ended before the Linux driver produced a receipt","architecture":"${{ matrix.architecture }}","compiler":"${{ matrix.compiler }}","source_sha":"${{ github.sha }}","dependency_setup":"${{ steps.dependencies.outcome }}","compiler_install":"${{ steps.compiler-install.outcome }}","floor_bootstrap":"${{ steps.floor-bootstrap.outcome }}"})+"\n")'
+          fi
+          mkdir -p "$NK_OUTPUT/export/logs"
+          if [[ -f "$RUNNER_TEMP/nk-linux-setup.log" ]]; then
+            tail -c 65536 "$RUNNER_TEMP/nk-linux-setup.log" > "$NK_OUTPUT/export/logs/setup.log"
+          fi
+          if [[ -f "$RUNNER_TEMP/nk-floor-arm64/bootstrap.json" ]]; then
+            cp "$RUNNER_TEMP/nk-floor-arm64/bootstrap.json" "$NK_OUTPUT/export/floor-bootstrap.json"
+          fi
+          exit "$fallback"
+      - name: Retain bounded Linux evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-${{ matrix.architecture }}-crystal-${{ matrix.compiler }}
+          path: ${{ env.NK_OUTPUT }}/export/
+          retention-days: 3
+          compression-level: 9
+          if-no-files-found: error
