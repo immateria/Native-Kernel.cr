@@ -7,7 +7,7 @@ module LinuxBehavior
     return 12 unless D.fcntl(reader, D::F_GETFD).primary == D::FD_CLOEXEC
     return 13 unless D.fcntl(reader, D::F_SETFD, 0_u64).error == 0
     return 14 unless D.fcntl(reader, D::F_GETFD).primary == 0
-    return 15 unless D.fcntl(reader, D::F_SETFD, D::FD_CLOEXEC.to_u64).error == 0
+    return 15 unless D.fcntl(reader, D::F_SETFD, D::FD_CLOEXEC.to_u64!).error == 0
     flags = D.fcntl(reader, D::F_GETFL)
     return 16 unless flags.error == 0 && D.fcntl(reader, D::F_SETFL, flags.primary.to_u64!).error == 0
     same = D.dup3(reader, reader, 0)

@@ -89,6 +89,72 @@ def elf_identity(path, architecture, *, executable=True):
             "interpreter": False, "dynamic_segment": False, "initializers": False}
 
 
+def elf_object_sections(path, architecture, function_count):
+    """Validate every transformed ELF section without printing an unbounded table."""
+    identity = elf_identity(path, architecture, executable=False)
+    data = Path(path).read_bytes()
+    shoff = struct.unpack_from("<Q", data, 40)[0]
+    shsize, shnum, names_index = struct.unpack_from("<HHH", data, 58)
+    if function_count < 1 or shsize != 64 or not (0 < names_index < shnum < 65535) or shoff + shnum * shsize > len(data):
+        raise ProofError("Invalid ELF object section table")
+    names_header = struct.unpack_from("<IIQQQQIIQQ", data, shoff + names_index * shsize)
+    name_offset, name_size = names_header[4:6]
+    if names_header[1] != 3 or not name_size or name_offset + name_size > len(data):
+        raise ProofError("Invalid ELF object section names")
+    names = data[name_offset:name_offset + name_size]
+    functions = set()
+    for index in range(shnum):
+        name, kind, flags, address, offset, size, link, info, alignment, entry_size = struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * shsize)
+        end = names.find(b"\0", name)
+        if name >= len(names) or end == -1:
+            raise ProofError("Invalid ELF object section name")
+        label = names[name:end]
+        if kind != 8 and offset + size > len(data):  # SHT_NOBITS has no file payload.
+            raise ProofError("Invalid ELF object section extent")
+        if flags & 1 and flags & 4:
+            raise ProofError("Writable executable ELF object section")
+        if size and (kind in (14, 15, 16) or label in (b".init_array", b".fini_array", b".preinit_array", b".ctors", b".dtors")):
+            raise ProofError("ELF object contains initialization/finalization arrays")
+        if label.startswith(b".text.nk."):
+            if label in functions or kind != 1 or flags & 7 != 6:
+                raise ProofError("Invalid or duplicate transformed function section")
+            functions.add(label)
+    if functions != {(".text.nk." + str(index)).encode() for index in range(function_count)}:
+        raise ProofError("Transformed ELF function-section roster differs from emitted assembly")
+    return dict(identity, sections=shnum, function_sections=len(functions),
+                all_sections_validated=True, initializers=False, writable_executable_sections=False)
+
+
+def crystal_stdlib_sources(environment, root):
+    """Parse Crystal's shell-escaped env value, then bind the selected source trees."""
+    assignments = [line.partition("=")[2] for line in environment.splitlines() if line.startswith("CRYSTAL_PATH=")]
+    if len(assignments) != 1:
+        raise ProofError("Expected one CRYSTAL_PATH in crystal env")
+    try:
+        values = shlex.split(assignments[0], comments=False, posix=True)
+    except ValueError as error:
+        raise ProofError("Malformed CRYSTAL_PATH in crystal env: " + str(error)) from error
+    if len(values) != 1 or not values[0] or any(char in values[0] for char in "\0\n\r"):
+        raise ProofError("Expected one nonempty CRYSTAL_PATH value")
+    paths = values[0].split(":")  # The reviewed Linux compilers use POSIX path lists.
+    if any(not path for path in paths):
+        raise ProofError("Empty CRYSTAL_PATH search entry")
+    directories = [(Path(root) / path).resolve() for path in paths if (Path(root) / path).is_dir()]
+    if not any((directory / "prelude.cr").is_file() for directory in directories):
+        raise ProofError("Cannot locate the selected Crystal standard-library directory")
+    sources = {str(path): common.sha256_file(path) for directory in directories
+               for path in sorted(directory.rglob("*.cr"))}
+    if not sources:
+        raise ProofError("Cannot identify the selected Crystal standard-library sources")
+    return sources
+
+
+def crystal_relative_path(path, directory):
+    """Crystal requires explicit relative paths, resolved at the caller's location."""
+    relative = Path(os.path.relpath(path, directory)).as_posix()
+    return relative if relative.startswith(("./", "../")) else "./" + relative
+
+
 def function_sections(assembly, architecture):
     """Give each compiler-emitted ELF function its own GC section.
 
@@ -142,6 +208,10 @@ def validate_native_host(architecture):
     if re.search(r"qemu|box64|FEXInterpreter", maps, re.I):
         raise ProofError("Translated execution cannot qualify a native profile")
     cpu = Path("/proc/cpuinfo").read_text()
+    # VirtualApple is positive evidence about this x86 process/CPU (Rosetta),
+    # unlike a globally registered binfmt handler which might not be in use.
+    if architecture == "x86_64" and re.search(r"^vendor_id\s*:\s*VirtualApple\s*$", cpu, re.M | re.I):
+        raise ProofError("Translated VirtualApple/Rosetta x86-64 CPU cannot qualify native execution")
     # Distinguish a native hosted architecture from a user-mode emulator's uname.
     if architecture == "x86_64" and not re.search(r"^flags\s*:", cpu, re.M):
         raise ProofError("Cannot establish x86-64 CPU profile")
@@ -156,11 +226,12 @@ def header_hashes(dependency_file, root=ROOT):
     return {str(path.resolve()): common.sha256_file(path) for path in paths}
 
 
-def enable_subreaper():
-    # Driver-only failure containment. Not part of either raw or typed API.
+def set_subreaper(enabled):
+    # Driver-only failure containment, scoped to native artifact execution.
+    # Never adopt the portable tests' or compiler tools' grandchildren.
     libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-        raise ProofError("Cannot establish exclusive orphan cleanup: errno " + str(ctypes.get_errno()))
+    if libc.prctl(36, int(enabled), 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise ProofError("Cannot set artifact orphan ownership: errno " + str(ctypes.get_errno()))
 
 
 def cleanup_adopted_children():
@@ -347,15 +418,7 @@ class Runner:
         self.env["CRYSTAL"] = compiler
         environment = self.stage("compiler-env", [compiler, "env"], timeout=20)
         self.receipt["compiler"]["environment"] = environment["stdout"]
-        # Hash the selected standard-library tree, if its default path is exposed.
-        match = re.search(r'^CRYSTAL_PATH="([^"]*)"', environment["stdout"], re.M)
-        if match:
-            paths = match[1].split(":")
-            self.receipt["compiler"]["stdlib_sha256"] = {
-                str(p): common.sha256_file(p) for directory in paths if Path(directory).is_dir()
-                for p in sorted(Path(directory).rglob("*.cr"))}
-        if not self.receipt["compiler"].get("stdlib_sha256"):
-            raise ProofError("Cannot identify the selected Crystal standard-library sources")
+        self.receipt["compiler"]["stdlib_sha256"] = crystal_stdlib_sources(environment["stdout"], self.root)
         self.compiler, self.version = compiler, version
 
     def rejection_tests(self, auditor):
@@ -383,21 +446,23 @@ class Runner:
         # compiler/linker/stdlib crashes cannot count as a successful negative.
         prelude = self.build / "refusal-prelude.cr"
         prelude.write_text("# Isolate the entry guard from unsupported target stdlibs.\n")
+        linux_message = "Linux kernel calls require non-Android LP64 GNU/musl Linux x86-64 or AArch64."
+        darwin_message = "Darwin kernel calls require ARM64 or x86-64."
         cases = [
-            ("linux-on-darwin", "aarch64-apple-darwin", "native-kernel/linux/raw", "Linux kernel calls require"),
-            ("linux-on-windows", "x86_64-pc-windows-msvc", "native-kernel/linux", "Linux kernel calls require"),
-            ("linux-on-i386", "i386-unknown-linux-gnu", "native-kernel/linux/raw", "Linux kernel calls require"),
-            ("linux-on-android", "aarch64-unknown-linux-android", "native-kernel/linux/raw", "Linux kernel calls require"),
-            ("linux-on-x32", "x86_64-unknown-linux-gnux32", "native-kernel/linux/raw", "Linux kernel calls require"),
-            ("linux-on-arm-ilp32", "aarch64-unknown-linux-gnu_ilp32", "native-kernel/linux/raw", "Linux kernel calls require"),
-            ("darwin-on-linux", "x86_64-unknown-linux-gnu", "native-kernel/darwin/raw", "Darwin kernel calls require"),
-            ("root-still-darwin", "x86_64-unknown-linux-gnu", "native-kernel", "Darwin kernel calls require"),
+            ("linux-on-darwin", "aarch64-apple-darwin", "native-kernel/linux/raw", linux_message),
+            ("linux-on-windows", "x86_64-pc-windows-msvc", "native-kernel/linux", linux_message),
+            ("linux-on-i386", "i386-unknown-linux-gnu", "native-kernel/linux/raw", linux_message),
+            ("linux-on-android", "aarch64-unknown-linux-android", "native-kernel/linux/raw", linux_message),
+            ("linux-on-x32", "x86_64-unknown-linux-gnux32", "native-kernel/linux/raw", linux_message),
+            ("linux-on-arm-ilp32", "aarch64-unknown-linux-gnu_ilp32", "native-kernel/linux/raw", linux_message),
+            ("darwin-on-linux", "x86_64-unknown-linux-gnu", "native-kernel/darwin/raw", darwin_message),
+            ("root-still-darwin", "x86_64-unknown-linux-gnu", "native-kernel", darwin_message),
         ]
         for name, target, entry, message in cases:
             source = self.build / (name + ".cr")
-            source.write_text('require ' + json.dumps(str(self.root / "src" / entry)) + '\n')
-            result = self.stage("refuse-" + name, [self.compiler, "build", "--no-codegen", "--prelude", str(prelude), "--target", target, str(source)], require=False)
-            if result["exit_code"] != 1 or message not in result["stderr"] + result["stdout"]:
+            source.write_text('require ' + json.dumps(crystal_relative_path(self.root / "src" / entry, source.parent)) + '\n')
+            result = self.stage("refuse-" + name, [self.compiler, "build", "--no-codegen", "--prelude", crystal_relative_path(prelude, self.root), "--target", target, str(source)], require=False)
+            if result["exit_code"] != 1 or result["output_truncated"] or message not in result["stderr"] + result["stdout"]:
                 raise ProofError("Unsupported direct require did not refuse explicitly: " + name)
             result.update(status="passed", expected_rejection=True)
 
@@ -440,21 +505,34 @@ class Runner:
                 stream.write(path.read_bytes())
         obj = Path(str(artifact) + ".sections.o")
         self.stage("assemble-" + name, self.cc + ["-c", "-x", "assembler", str(sectioned), "-o", str(obj)])
-        elf_identity(obj, self.architecture, executable=False)
-        self.stage("object-" + name, ["readelf", "-h", "-S", "-W", str(obj)])
+        record["object_sections"] = elf_object_sections(obj, self.architecture, len(functions))
+        common.write_json(self.export / (name + ".object-sections.json"), record["object_sections"])
+        self.write()
+        self.stage("object-" + name, ["readelf", "-h", "-W", str(obj)])
         self.link(name, obj, artifact)
         identity = self.inspect(name, artifact)
-        emitted_hash = record["compiler_object_sha256"]
+        emitted_hash, object_sections = record["compiler_object_sha256"], record["object_sections"]
         record = self.artifact(name, artifact, ir=ir, obj=obj)
         record.update(identity=identity, target=triple[1], optimization=optimization, status="audited-and-linked",
-                      compiler_object_sha256=emitted_hash, function_sections=section_record)
+                      compiler_object_sha256=emitted_hash, function_sections=section_record, object_sections=object_sections)
         return artifact, record
 
     def runtime(self, artifact, name, optimization, mapping):
         expected = "NK linux raw passed\n" if name == "raw" else "NK_OK linux " + name + "\n"
-        result = self.stage("execute-" + name + "-" + optimization,
-                            [str(artifact), name, "ELF-argument", str(mapping)], timeout=45 if name == "leaks" else 12, require=False)
-        adopted = cleanup_adopted_children()
+        # This artifact's build/audit/link stages are complete. Own descendants
+        # only during its execution; release the scope before running tools again.
+        set_subreaper(True)
+        self.receipt["host"]["orphan_ownership"] = "native artifact execution only"
+        try:
+            result = self.stage("execute-" + name + "-" + optimization,
+                                [str(artifact), name, "ELF-argument", str(mapping)], timeout=45 if name == "leaks" else 12, require=False)
+        finally:
+            try:
+                adopted = cleanup_adopted_children()
+                self.receipt.setdefault("final_adopted_children", []).extend(adopted)
+            finally:
+                set_subreaper(False)
+            self.write()
         result["adopted_children"] = adopted
         complete = result["exit_code"] == 0 and result["stdout"] == expected and result["stderr"] == "" and not result["output_truncated"] and not adopted
         if not complete:
@@ -466,16 +544,19 @@ class Runner:
             raise ProofError("Native case failed, lacked exact completion, or leaked a child: " + name)
 
     def run(self):
-        subreaper = False
         try:
             if self.args.record_failure:
                 self.receipt["status"] = "blocked"
                 raise ProofError(self.args.record_failure)
-            validate_native_host(self.host_arch if self.cross else self.architecture)
+            self.receipt["host"]["admission"] = "unqualified"
+            try:
+                validate_native_host(self.host_arch if self.cross else self.architecture)
+            except (ProofError, OSError):
+                self.receipt["status"] = "blocked"
+                raise
+            self.receipt["host"]["admission"] = "passed"
             if self.cross and self.architecture == self.host_arch:
                 raise ProofError("Cross-only mode must select a different architecture")
-            enable_subreaper()
-            subreaper = True
             self.receipt["host"]["execution"] = "native Linux caller; no translation admitted"
             self.oracles()
             self.identify_compiler()
@@ -484,7 +565,7 @@ class Runner:
             if not self.cross:
                 result = self.stage("specs", [self.compiler, "spec", "--error-on-warnings", "--no-color"])
                 examples = re.search(r"(\d+) examples?,", result["stdout"])
-                if not examples or int(examples[1]) < 10:
+                if not examples or int(examples[1]) < 20:
                     raise ProofError("Specs did not execute the Linux/portable roster")
                 self.receipt["spec_examples"] = int(examples[1])
                 selected = self.stage("linux-specs", [self.compiler, "spec", "spec/linux_raw_spec.cr", "spec/linux_abi_spec.cr", "--error-on-warnings", "--no-color"])
@@ -524,14 +605,6 @@ class Runner:
             if self.receipt["status"] != "blocked":
                 self.receipt["status"] = "failed"
         finally:
-            if subreaper:
-                try:
-                    adopted = cleanup_adopted_children()
-                    self.receipt["final_adopted_children"] = adopted
-                    if adopted:
-                        self.receipt.update(status="failed", reason="Adopted children remained outside runtime cleanup")
-                except (ProofError, OSError) as error:
-                    self.receipt.update(status="failed", reason="Final child cleanup failed: " + str(error))
             self.receipt["source_after"] = source_identity(self.root)
             self.receipt["source_unchanged"] = self.receipt["source_before"] == self.receipt["source_after"]
             if not self.receipt["source_unchanged"]:

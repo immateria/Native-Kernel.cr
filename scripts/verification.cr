@@ -3,7 +3,7 @@ module Native::Kernel::Verification
   TOKEN      = /([@%])("(?:\\.|[^"\\])*"|[-a-zA-Z$._0-9]+)|"(?:\\.|[^"\\])*"|;[^\n]*/
   CALL       = /\A\s*(?:%(?:"(?:\\.|[^"\\])*"|[-a-zA-Z$._0-9]+)\s*=\s*)?(?:(?:tail|musttail|notail)\s+)?(?:call|invoke|callbr)\s+/
   ASM        = /\basm(?: sideeffect)? "((?:\\.|[^"\\])*)", "((?:\\.|[^"\\])*)"/
-  INTRINSICS = %w(llvm.memcpy. llvm.memmove. llvm.memset. llvm.lifetime.start. llvm.lifetime.end. llvm.expect. llvm.smin. llvm.smax. llvm.experimental.cttz.elts.)
+  INTRINSICS = %w(llvm.memcpy. llvm.memmove. llvm.memset. llvm.lifetime.start. llvm.lifetime.end. llvm.expect. llvm.smin. llvm.smax. llvm.experimental.cttz.elts. llvm.uadd.with.overflow. llvm.sadd.with.overflow. llvm.usub.with.overflow. llvm.ssub.with.overflow. llvm.umul.with.overflow. llvm.smul.with.overflow.)
 
   private def self.symbol(line : String) : String?
     line.scan(TOKEN) { |match| return match[2] if match[1]? == "@" }

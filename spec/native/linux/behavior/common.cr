@@ -54,7 +54,7 @@ module LinuxBehavior
   # All non-flag slots are zero on both architectures. Never control primary
   # unless error == 0 and primary > 0. Child/parent each own their own stack.
   def self.create : Linux::Result
-    Linux::Raw.call(Linux::Number::CLONE, S::CHLD.to_u64)
+    Linux::Raw.call(Linux::Number::CLONE, S::CHLD.to_u64!)
   end
 
   def self.pause : Nil
