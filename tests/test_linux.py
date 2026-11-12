@@ -271,6 +271,8 @@ class CrystalEnvironmentTests(unittest.TestCase):
 class LinuxFloorPreludeTests(unittest.TestCase):
     MAIN = b'require "crystal/main"\n'
     ORIGINAL = b'# keep every byte \xc3\xa9\r\nrequire "object"\n' + MAIN + b'# require "crystal/main" is inert\r\nrequire "array"\n'
+    MAIN_SOURCE = (b"module Crystal\n  def self.ignore_stdio_errors(&)\n    yield\n  rescue IO::Error\n  end\nend\n"
+                   b"fun main(argc : Int32, argv : UInt8**) : Int32\n  Crystal.main(argc, argv)\nend\n")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="nk-floor prelude-")
@@ -279,6 +281,8 @@ class LinuxFloorPreludeTests(unittest.TestCase):
         self.stdlib = self.directory / "selected stdlib"
         self.stdlib.mkdir()
         (self.stdlib / "prelude.cr").write_bytes(self.ORIGINAL)
+        (self.stdlib / "crystal").mkdir()
+        (self.stdlib / "crystal/main.cr").write_bytes(self.MAIN_SOURCE)
 
     def proof(self, name="proof", version="1.10.0", environment=None):
         proof = runner.Runner(proof_args(self.directory / name, expected_compiler=version))
@@ -302,6 +306,24 @@ class LinuxFloorPreludeTests(unittest.TestCase):
             self.assertTrue(transformation["all_other_bytes_preserved"])
         generated, _ = runner.floor_prelude_bytes(self.ORIGINAL)
         self.assertEqual(generated, self.ORIGINAL.replace(self.MAIN, b"", 1))
+
+    def test_floor_main_adapter_extracts_only_one_exact_stdlib_stdio_helper(self):
+        helper, transformation = runner.floor_stdio_helper_bytes(self.MAIN_SOURCE)
+        expected = b"  def self.ignore_stdio_errors(&)\n    yield\n  rescue IO::Error\n  end\n"
+        self.assertEqual(helper, expected)
+        self.assertEqual(transformation["line_number"], 2)
+        self.assertEqual(transformation["method_sha256"], hashlib.sha256(expected).hexdigest())
+        adapter_path = self.directory / "build/unmanaged-prelude.cr"
+        prelude_path = self.directory / "build/prelude-without-main.cr"
+        adapter = runner.floor_unmanaged_adapter_bytes(prelude_path, adapter_path, helper)
+        self.assertTrue(adapter.startswith(b"module Crystal\n" + expected + b'end\nrequire "./prelude-without-main.cr"\n'))
+        self.assertIn(expected, adapter)
+        self.assertNotIn(b"def main(", adapter)
+        for malformed in (b"", self.MAIN_SOURCE.replace(b"def self.ignore_stdio_errors(&)", b"def self.ignore_stdio_errors(block)"),
+                          self.MAIN_SOURCE.replace(b"  rescue IO::Error\n", b"  rescue Exception\n"),
+                          self.MAIN_SOURCE + b"module Crystal\n  def self.ignore_stdio_errors(&)\n    yield\n  rescue IO::Error\n  end\nend\n"):
+            with self.subTest(malformed=malformed), self.assertRaisesRegex(runner.ProofError, "expected ignore_stdio_errors helper"):
+                runner.floor_stdio_helper_bytes(malformed)
 
     def test_zero_duplicate_and_malformed_main_requires_fail_closed(self):
         malformed = (b"", b'require "array"\n', b'# require "crystal/main"\n', self.MAIN * 2,
@@ -334,11 +356,23 @@ class LinuxFloorPreludeTests(unittest.TestCase):
             self.assertEqual(prelude["original_sha256"], hashlib.sha256(self.ORIGINAL).hexdigest())
             self.assertEqual(prelude["generated_sha256"], runner.common.sha256_file(generated))
             self.assertEqual(proof.receipt["compiler"]["stdlib_sha256"][prelude["original_path"]], prelude["original_sha256"])
+            adapter = prelude["adapter"]
+            adapter_source = Path(adapter["source_path"])
+            adapter_path = Path(adapter["generated_path"])
+            adapter_bytes = adapter_path.read_bytes()
+            self.assertEqual(adapter["source_sha256"], hashlib.sha256(self.MAIN_SOURCE).hexdigest())
+            self.assertEqual(proof.receipt["compiler"]["stdlib_sha256"][adapter["source_path"]], adapter["source_sha256"])
+            self.assertIn(b"def self.ignore_stdio_errors(&)", adapter_bytes)
+            self.assertNotIn(b"fun main(", adapter_bytes)
+            self.assertNotIn(b"Crystal.main(", adapter_bytes)
+            self.assertTrue(adapter_source.is_relative_to(self.stdlib))
+            self.assertEqual(adapter["generated_sha256"], runner.common.sha256_file(adapter_path))
+            self.assertEqual((adapter_path.parent / "prelude-without-main-1.10.0.cr").resolve(), generated.resolve())
             source_directory = proof.root / "spec/native/linux"
             flags = proof.unmanaged_flags(source_directory / "raw_probe.cr")
             self.assertEqual(flags[:2], ["-Dwithout_main", "--prelude"])
             self.assertTrue(flags[2].startswith(("./", "../")))
-            self.assertEqual((source_directory / flags[2]).resolve(), generated.resolve())
+            self.assertEqual((source_directory / flags[2]).resolve(), adapter_path.resolve())
             self.assertEqual(entry["flags"], flags)
             runner.check_floor_prelude(prelude)
 
@@ -347,13 +381,31 @@ class LinuxFloorPreludeTests(unittest.TestCase):
         earlier.mkdir()
         data = b'# first search entry\n' + self.MAIN
         (earlier / "prelude.cr").write_bytes(data)
+        (earlier / "crystal").mkdir()
+        (earlier / "crystal/main.cr").write_bytes(self.MAIN_SOURCE)
         environment = "CRYSTAL_PATH=" + shlex.quote(os.path.relpath(earlier, ROOT) + ":" + str(self.stdlib))
         proof, environment = self.proof(environment=environment)
         proof.prepare_unmanaged_entry(environment)
         prelude = proof.receipt["unmanaged_entry"]["prelude"]
         self.assertEqual(Path(prelude["original_path"]), (earlier / "prelude.cr").resolve())
         self.assertEqual(prelude["original_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(Path(prelude["adapter"]["source_path"]), (earlier / "crystal/main.cr").resolve())
         self.assertEqual((self.stdlib / "prelude.cr").read_bytes(), self.ORIGINAL)
+
+    def test_first_crystal_require_expansion_selects_nested_prelude_and_main_sources(self):
+        earlier = self.directory / "earlier nested"
+        (earlier / "prelude").mkdir(parents=True)
+        (earlier / "crystal/main").mkdir(parents=True)
+        data = b'# nested first search entry\n' + self.MAIN
+        (earlier / "prelude/prelude.cr").write_bytes(data)
+        (earlier / "crystal/main/main.cr").write_bytes(self.MAIN_SOURCE)
+        environment = "CRYSTAL_PATH=" + shlex.quote(os.path.relpath(earlier, ROOT) + ":" + str(self.stdlib))
+        proof, environment = self.proof(environment=environment)
+        proof.prepare_unmanaged_entry(environment)
+        prelude = proof.receipt["unmanaged_entry"]["prelude"]
+        self.assertEqual(Path(prelude["original_path"]), (earlier / "prelude/prelude.cr").resolve())
+        self.assertEqual(Path(prelude["adapter"]["source_path"]), (earlier / "crystal/main/main.cr").resolve())
+        self.assertEqual(prelude["original_sha256"], hashlib.sha256(data).hexdigest())
 
     def test_missing_or_malformed_search_paths_cannot_generate_a_prelude(self):
         for index, environment in enumerate(("", "CRYSTAL_PATH=", "CRYSTAL_PATH='unterminated", "CRYSTAL_PATH=missing", "CRYSTAL_PATH=lib extra")):
@@ -362,15 +414,16 @@ class LinuxFloorPreludeTests(unittest.TestCase):
                 proof.prepare_unmanaged_entry(environment)
             self.assertEqual(list(proof.build.iterdir()), [])
 
-    def test_original_must_match_the_selected_hashed_stdlib_source(self):
-        proof, environment = self.proof()
-        proof.receipt["compiler"]["stdlib_sha256"][str((self.stdlib / "prelude.cr").resolve())] = "0" * 64
-        with self.assertRaisesRegex(runner.ProofError, "hashed compiler inputs"):
-            proof.prepare_unmanaged_entry(environment)
-        self.assertEqual(list(proof.build.iterdir()), [])
+    def test_original_prelude_and_main_helper_must_match_hashed_stdlib_sources(self):
+        for source in ((self.stdlib / "prelude.cr").resolve(), (self.stdlib / "crystal/main.cr").resolve()):
+            proof, environment = self.proof(str(source.name))
+            proof.receipt["compiler"]["stdlib_sha256"][str(source)] = "0" * 64
+            with self.subTest(source=source), self.assertRaisesRegex(runner.ProofError, "hashed compiler inputs"):
+                proof.prepare_unmanaged_entry(environment)
+            self.assertEqual(list(proof.build.iterdir()), [])
 
     def test_floor_build_refuses_unprepared_or_mutated_prelude_before_compiling(self):
-        for index, change in enumerate(("unprepared", "original", "generated", "metadata", "forged generated hash")):
+        for index, change in enumerate(("unprepared", "original", "generated", "metadata", "helper source", "adapter", "adapter metadata", "forged generated hash")):
             proof, environment = self.proof(str(index))
             if change != "unprepared":
                 proof.prepare_unmanaged_entry(environment)
@@ -379,6 +432,12 @@ class LinuxFloorPreludeTests(unittest.TestCase):
                     Path(prelude["original_path"]).write_bytes(self.ORIGINAL + b"# mutation\n")
                 elif change == "metadata":
                     prelude["transformation"]["byte_offset"] += 1
+                elif change == "helper source":
+                    Path(prelude["adapter"]["source_path"]).write_bytes(self.MAIN_SOURCE + b"# mutation\n")
+                elif change == "adapter":
+                    Path(prelude["adapter"]["generated_path"]).write_bytes(b"# wrong adapter\n")
+                elif change == "adapter metadata":
+                    prelude["adapter"]["operation"] += " with an unexpected overload"
                 else:
                     Path(prelude["generated_path"]).write_bytes(b"# wrong prelude\n")
                     if change == "forged generated hash":
@@ -388,18 +447,24 @@ class LinuxFloorPreludeTests(unittest.TestCase):
                     proof.build_probe("raw", "development", "fixture-auditor")
                 stage.assert_not_called()
             (self.stdlib / "prelude.cr").write_bytes(self.ORIGINAL)
+            (self.stdlib / "crystal/main.cr").write_bytes(self.MAIN_SOURCE)
 
-    def test_final_receipt_rechecks_generated_prelude_as_a_compiler_input(self):
-        proof, environment = self.proof()
-        proof.prepare_unmanaged_entry(environment)
-        generated = Path(proof.receipt["unmanaged_entry"]["prelude"]["generated_path"])
-        generated.write_bytes(generated.read_bytes() + b"# late mutation\n")
-        proof.args.record_failure = "test stops before executing any proof stage"
-        self.assertEqual(proof.run(), 1)
-        self.assertEqual(proof.receipt["status"], "failed")
-        self.assertFalse(proof.receipt["compiler_inputs_unchanged"])
-        self.assertEqual(proof.receipt["qualification"], "incomplete")
-        self.assertEqual(proof.receipt["cases"], [])
+    def test_final_receipt_rechecks_prelude_adapter_and_helper_sources(self):
+        for index, change in enumerate(("generated prelude", "adapter", "helper source")):
+            proof, environment = self.proof(str(index))
+            proof.prepare_unmanaged_entry(environment)
+            prelude = proof.receipt["unmanaged_entry"]["prelude"]
+            path = Path(prelude["generated_path"] if change == "generated prelude" else
+                        prelude["adapter"]["source_path"] if change == "helper source" else
+                        prelude["adapter"]["generated_path"])
+            path.write_bytes(path.read_bytes() + b"# late mutation\n")
+            proof.args.record_failure = "test stops before executing any proof stage"
+            with self.subTest(change=change):
+                self.assertEqual(proof.run(), 1)
+                self.assertEqual(proof.receipt["status"], "failed")
+                self.assertFalse(proof.receipt["compiler_inputs_unchanged"])
+                self.assertEqual(proof.receipt["qualification"], "incomplete")
+                self.assertEqual(proof.receipt["cases"], [])
 
     def test_all_floor_fixture_modes_use_the_derived_prelude_and_unchanged_entry(self):
         proof, environment = self.proof()
@@ -415,7 +480,7 @@ class LinuxFloorPreludeTests(unittest.TestCase):
                     self.assertEqual(name, "compile-" + fixture + "-" + mode)
                     self.assertIn("-Dwithout_main", command)
                     self.assertEqual((Path(command[-3]).parent / command[command.index("--prelude") + 1]).resolve(),
-                                     Path(proof.receipt["unmanaged_entry"]["prelude"]["generated_path"]))
+                                     Path(proof.receipt["unmanaged_entry"]["prelude"]["adapter"]["generated_path"]))
                     self.assertNotIn("-O0", command)  # Not a 1.10 option.
                     source = Path(command[-3]).read_text()
                     self.assertIn("fun main(argc : Int32, argv : UInt8**, stack : UInt64*, call_stack : UInt64) : Int32", source)

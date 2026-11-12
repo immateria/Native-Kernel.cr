@@ -160,10 +160,20 @@ copyouts, resource units and copyout-after-consumption semantics.
 
 Crystal sources are pinned at 1.22.2
 `1447d239ffd7b0456fcc183731c5e684b6b074f7` and 1.10.0
-`9c011d77d660a5a7441370dce9e101b3ca094d8b`. No C declarations are added and
-nothing from `lib_c` is imported by the Linux implementation. Inspection of
-floor code also avoids the later `alignof` expression in specs; struct-offset
-observations and independent C `_Alignof` assertions cover alignment.
+`9c011d77d660a5a7441370dce9e101b3ca094d8b`. The floor's external build-local
+prelude removes exactly its one standalone `crystal/main` require and preserves
+every other selected byte. Because the floor's `kernel.cr` also references
+`Crystal.ignore_stdio_errors`, its separate adapter defines only that exact
+method from the selected, hashed `crystal/main.cr` before requiring the derived
+prelude; it never imports or defines managed `Crystal.main` or C `main`. Both
+source hashes, generated-file hashes
+and the exact transformations are rechecked before build and at receipt finalization.
+The LLVM auditor admits only the six reviewed overflow families at fixed scalar
+widths, with the floor-only i9/i17/i33/i65/i129 additions restricted to `sadd`
+and `ssub`. No C declarations are added and nothing from `lib_c` is imported by
+the Linux implementation. Inspection of floor code also avoids the later
+`alignof` expression in specs; struct-offset observations and independent C
+`_Alignof` assertions cover alignment.
 
 Linux UAPI files declare GPL-2.0 WITH Linux-syscall-note. Nolibc architecture
 examples declare LGPL-2.1 OR MIT; they establish registers/startup conventions,

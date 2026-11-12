@@ -155,17 +155,27 @@ is a failed/incomplete cell, not a substituted compiler or successful skip.
 For unmanaged 1.10.0 builds, the driver derives an external build-local prelude
 from the first `prelude.cr` selected by that exact compiler's `CRYSTAL_PATH`.
 It removes only the single standalone `require "crystal/main"` line: 1.10.0's
-ordinary prelude defines managed C `main` even with `-Dwithout_main`. Crystal
-resolves `--prelude` as a require from the primary source file, so the driver
-passes a path relative to the fixture source directory (not an assumed working
-or repository root). Missing, duplicate or malformed main references fail
-closed. The receipt binds both prelude paths/hashes, the removed bytes/offset
-and byte-preserving transformation; both inputs are rechecked before compilation
-and at exit. No stdlib is vendored,
-no fixture entry ABI changes, and current compilers keep `-Dwithout_main` without
-any prelude rewrite. LLVM audit, static no-import linking and native execution
-remain mandatory on both releases. Overflow-intrinsic admission uses complete
-anchored scalar integer overload names, never the overflow-family prefixes.
+ordinary prelude defines managed C `main` even with `-Dwithout_main`. The
+selected `crystal/main.cr` also supplies `Crystal.ignore_stdio_errors`, which
+`kernel.cr` references. A second external adapter therefore defines only that
+exact helper first, then requires the main-free prelude; it does not copy or
+define managed `Crystal.main` or C `main`. Crystal resolves `--prelude` as a
+require from the primary source file, so the driver passes a path relative to
+the fixture source directory (not an assumed working or repository root).
+Missing, duplicate or malformed main references or helper definitions fail
+closed. The receipt binds and rechecks the selected prelude/main sources, their
+hashes, the removed bytes/offset, extracted helper, both generated files and
+each exact transformation before compilation and at exit. No stdlib is
+vendored, no fixture entry ABI changes, and current compilers keep
+`-Dwithout_main` without any prelude rewrite. LLVM audit, static no-import
+linking and native execution remain mandatory on both releases.
+
+Overflow-intrinsic admission is anchored to complete scalar symbols: `uadd`,
+`usub`, `umul` and `smul` accept only i8/i16/i32/i64/i128; `sadd` and `ssub`
+also accept the floor compiler's mixed-signedness i9/i17/i33/i65/i129
+widenings. The widths are reviewed against both pinned `codegen/primitives.cr`
+inputs. Suffixes, other widths, vectors and unrelated LLVM/runtime symbols are
+rejected by executable regressions; no family-prefix admission remains.
 
 `export/receipt-review.json` is a bounded view of the actual full receipt, bound
 by its SHA-256. It retains all stage, artifact and runtime-case records needed for

@@ -142,9 +142,39 @@ def crystal_search_directories(environment, root):
     if any(not path for path in paths):
         raise ProofError("Empty CRYSTAL_PATH search entry")
     directories = [(Path(root) / path).resolve() for path in paths if (Path(root) / path).is_dir()]
-    if not any((directory / "prelude.cr").is_file() for directory in directories):
+    if not directories or crystal_require_source("prelude", directories) is None:
         raise ProofError("Cannot locate the selected Crystal standard-library directory")
     return directories
+
+
+def crystal_require_source(filename, directories):
+    """Mirror Crystal 1.10/1.22's first-file require expansion for a logical name."""
+    relative = Path(filename)
+    if relative.is_absolute() or "\0" in filename or "\n" in filename or "\r" in filename:
+        raise ProofError("Unexpected absolute or malformed compiler require name")
+    for directory in directories:
+        base = directory / relative
+        candidates = [base if filename.endswith(".cr") else Path(str(base) + ".cr")]
+        filename_is_relative = filename.startswith(".")
+        parts = filename.partition("/")
+        shard_name, has_separator, shard_path = parts
+        if not filename_is_relative and has_separator:
+            shard_source = directory / shard_name / "src"
+            shard_path_stem = shard_path[:-3] if shard_path.endswith(".cr") else shard_path
+            candidates.extend((shard_source / (shard_path_stem + ".cr"),
+                               shard_source / shard_name / (shard_path_stem + ".cr"),
+                               base / (base.name.removesuffix(".cr") + ".cr"),
+                               shard_source / shard_path / (shard_path_stem + ".cr"),
+                               shard_source / shard_name / shard_path / (shard_path_stem + ".cr")))
+        else:
+            basename = base.name.removesuffix(".cr")
+            candidates.append(base / (basename + ".cr"))
+            if not filename_is_relative:
+                candidates.append(base / "src" / (basename + ".cr"))
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+    return None
 
 
 def crystal_stdlib_sources(environment, root):
@@ -186,14 +216,54 @@ def floor_prelude_bytes(original):
                        "all_other_bytes_preserved": True}
 
 
+def floor_stdio_helper_bytes(original):
+    """Extract only the exact 1.10 stdio helper needed by kernel.cr's exit definitions."""
+    lines = original.splitlines(keepends=True)
+    definitions = [index for index, line in enumerate(lines)
+                   if b"def self.ignore_stdio_errors" in line and not line.lstrip().startswith(b"#")]
+    expected = (b"  def self.ignore_stdio_errors(&)\n", b"    yield\n", b"  rescue IO::Error\n", b"  end\n")
+    if len(definitions) != 1 or tuple(lines[definitions[0]:definitions[0] + len(expected)]) != expected:
+        raise ProofError("Selected floor main source must contain exactly the expected ignore_stdio_errors helper")
+    index = definitions[0]
+    offset = sum(map(len, lines[:index]))
+    helper = b"".join(lines[index:index + len(expected)])
+    return helper, {"operation": "Select only the exact Crystal.ignore_stdio_errors method; no other main.cr bytes are copied",
+                    "line_number": index + 1, "byte_offset": offset, "method_size": len(helper),
+                    "method_sha256": hashlib.sha256(helper).hexdigest(), "all_other_main_bytes_omitted": True}
+
+
+FLOOR_UNMANAGED_ADAPTER_OPERATION = "Expose only the selected Crystal.ignore_stdio_errors helper before requiring the exact main-free prelude"
+
+
+def floor_unmanaged_adapter_bytes(prelude_path, adapter_path, helper):
+    """Expose the exact floor helper before loading the unchanged derived prelude."""
+    relative = crystal_relative_path(prelude_path, Path(adapter_path).parent)
+    return b"module Crystal\n" + helper + b"end\nrequire " + json.dumps(relative).encode("ascii") + b"\n"
+
+
 def check_floor_prelude(record):
-    """Recheck both selected and generated inputs before compilation and at exit."""
-    original, generated = Path(record["original_path"]).read_bytes(), Path(record["generated_path"]).read_bytes()
-    expected, transformation = floor_prelude_bytes(original)
+    """Recheck selected/generated prelude and helper adapter before builds and at exit."""
+    try:
+        original = Path(record["original_path"]).read_bytes()
+        generated = Path(record["generated_path"]).read_bytes()
+        adapter = record["adapter"]
+        helper_source = Path(adapter["source_path"]).read_bytes()
+        adapter_bytes = Path(adapter["generated_path"]).read_bytes()
+        expected, transformation = floor_prelude_bytes(original)
+        helper, helper_transformation = floor_stdio_helper_bytes(helper_source)
+        expected_adapter = floor_unmanaged_adapter_bytes(record["generated_path"], adapter["generated_path"], helper)
+    except (KeyError, TypeError) as error:
+        raise ProofError("Floor prelude/adapter receipt is incomplete") from error
     if (hashlib.sha256(original).hexdigest() != record["original_sha256"] or
             hashlib.sha256(generated).hexdigest() != record["generated_sha256"] or
-            generated != expected or transformation != record["transformation"]):
-        raise ProofError("Selected/generated floor prelude or exact transformation changed")
+            generated != expected or transformation != record["transformation"] or
+            hashlib.sha256(helper_source).hexdigest() != adapter["source_sha256"] or
+            hashlib.sha256(helper).hexdigest() != adapter["method_sha256"] or
+            helper_transformation != adapter["transformation"] or
+            adapter.get("operation") != FLOOR_UNMANAGED_ADAPTER_OPERATION or
+            hashlib.sha256(adapter_bytes).hexdigest() != adapter["generated_sha256"] or
+            adapter_bytes != expected_adapter):
+        raise ProofError("Selected/generated floor prelude, helper source or exact adapter transformation changed")
 
 
 def function_sections(assembly, architecture):
@@ -468,24 +538,39 @@ class Runner:
         if self.version == "1.10.0":
             # This release ignores without_main and always requires crystal/main.
             # Use its actual first-selected prelude, changing no other stdlib input.
-            original = next(directory / "prelude.cr" for directory in crystal_search_directories(environment, self.root)
-                            if (directory / "prelude.cr").is_file())
-            data = original.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            if self.receipt["compiler"]["stdlib_sha256"].get(str(original)) != digest:
+            directories = crystal_search_directories(environment, self.root)
+            original = crystal_require_source("prelude", directories)
+            main_source = crystal_require_source("crystal/main", directories)
+            if original is None or main_source is None:
+                raise ProofError("Cannot locate the selected floor prelude and main source")
+            data, main_data = original.read_bytes(), main_source.read_bytes()
+            digest, main_digest = hashlib.sha256(data).hexdigest(), hashlib.sha256(main_data).hexdigest()
+            selected_sources = self.receipt["compiler"]["stdlib_sha256"]
+            if selected_sources.get(str(original)) != digest:
                 raise ProofError("Selected floor prelude differs from the hashed compiler inputs")
+            if selected_sources.get(str(main_source)) != main_digest:
+                raise ProofError("Selected floor main source differs from the hashed compiler inputs")
             generated, transformation = floor_prelude_bytes(data)
+            helper, helper_transformation = floor_stdio_helper_bytes(main_data)
             path = self.build / "prelude-without-main-1.10.0.cr"
             path.write_bytes(generated)
+            adapter_path = self.build / "unmanaged-prelude-1.10.0.cr"
+            adapter_bytes = floor_unmanaged_adapter_bytes(path, adapter_path, helper)
+            adapter_path.write_bytes(adapter_bytes)
+            adapter = {"source_path": str(main_source), "source_sha256": main_digest,
+                       "method_sha256": hashlib.sha256(helper).hexdigest(), "transformation": helper_transformation,
+                       "generated_path": str(adapter_path), "generated_sha256": common.sha256_file(adapter_path),
+                       "operation": FLOOR_UNMANAGED_ADAPTER_OPERATION}
             prelude = {"original_path": str(original), "original_sha256": digest,
                        "generated_path": str(path), "generated_sha256": common.sha256_file(path),
-                       "transformation": transformation}
+                       "transformation": transformation, "adapter": adapter}
             check_floor_prelude(prelude)
             source_directory = self.root / "spec/native/linux"
-            entry.update(strategy="selected-floor-prelude-minus-main", prelude=prelude,
-                         flags=["-Dwithout_main", "--prelude", crystal_relative_path(path, source_directory)])
-            # Retain the exact generated bytes with the source-bound evidence.
+            entry.update(strategy="selected-floor-prelude-minus-main-with-stdio-helper", prelude=prelude,
+                         flags=["-Dwithout_main", "--prelude", crystal_relative_path(adapter_path, source_directory)])
+            # Retain the exact generated prelude and minimal adapter as evidence.
             shutil.copy2(path, self.export / path.name)
+            shutil.copy2(adapter_path, self.export / adapter_path.name)
         self.write()
 
     def unmanaged_flags(self, source):
@@ -496,7 +581,10 @@ class Runner:
         if not prelude:
             raise ProofError("Floor unmanaged build requires the source-bound generated prelude")
         check_floor_prelude(prelude)
-        return ["-Dwithout_main", "--prelude", crystal_relative_path(prelude["generated_path"], Path(source).parent)]
+        adapter = prelude.get("adapter")
+        if not adapter:
+            raise ProofError("Floor unmanaged build requires the source-bound no-main adapter")
+        return ["-Dwithout_main", "--prelude", crystal_relative_path(adapter["generated_path"], Path(source).parent)]
 
     def rejection_tests(self, auditor):
         reasons = {"external": "unapproved symbol write", "mutable": "mutable global", "incorrect": "indirect or unrecognized", "darwin": "indirect or unrecognized"}
@@ -701,6 +789,11 @@ class Runner:
             prelude = self.receipt.get("unmanaged_entry", {}).get("prelude")
             if prelude:
                 selected[prelude["generated_path"]] = prelude["generated_sha256"]
+                adapter = prelude.get("adapter", {})
+                if adapter.get("generated_path") and adapter.get("generated_sha256"):
+                    selected[adapter["generated_path"]] = adapter["generated_sha256"]
+                if adapter.get("source_path") and adapter.get("source_sha256"):
+                    selected[adapter["source_path"]] = adapter["source_sha256"]
                 try:
                     check_floor_prelude(prelude)
                 except (ProofError, OSError) as error:

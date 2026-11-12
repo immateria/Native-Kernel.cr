@@ -47,9 +47,15 @@ describe Native::Kernel::Verification do
     expect_raises(ArgumentError, /indirect or unrecognized/) { Native::Kernel::Verification.verify(ir, assembly: Native::Kernel::Audit::ASSEMBLY.to_set) }
   end
 
-  it "admits the six explicit arithmetic overflow-result intrinsic families" do
-    %w(uadd sadd usub ssub umul smul).each do |operation|
-      %w(i8 i9 i16 i17 i32 i33 i64 i65 i128 i129).each do |type|
+  it "admits only the six reviewed arithmetic overflow families and widths" do
+    fixed = %w(i8 i16 i32 i64 i128)
+    floor_signed_addsub = %w(i9 i17 i33 i65 i129)
+    widths = {
+      "uadd" => fixed, "usub" => fixed, "umul" => fixed, "smul" => fixed,
+      "sadd" => fixed + floor_signed_addsub, "ssub" => fixed + floor_signed_addsub,
+    }
+    widths.each do |operation, types|
+      types.each do |type|
         ir = <<-LLVM
           declare { #{type}, i1 } @llvm.#{operation}.with.overflow.#{type}(#{type}, #{type})
           define i32 @main() {
@@ -62,12 +68,26 @@ describe Native::Kernel::Verification do
     end
   end
 
-  it "does not grant general LLVM or similarly named arithmetic admission" do
-    %w(llvm.trap llvm.assume llvm.uadd.sat.i64 llvm.uadd.with.overflowing.i64 llvm.other.with.overflow.i64
-      llvm.uadd.with.overflow.evil llvm.uadd.with.overflow. llvm.uadd.with.overflow.i64.extra
-      llvm.uadd.with.overflow.i64evil llvm.uadd.with.overflow.i0 llvm.uadd.with.overflow.i01 llvm.uadd.with.overflow.i66
-      llvm.uad.with.overflow.i64 llvm.saddd.with.overflow.i64 llvm.umul.with.overflows.i64
-      llvm.ssub.with.overflow.v2i64 llvm.smul.with.overflow.nxv2i64).each do |name|
+  it "rejects unreviewed widths, malformed suffixes, vectors and unrelated symbols" do
+    invalid = %w(llvm.trap llvm.assume llvm.uadd.sat.i64 llvm.uadd.with.overflowing.i64 llvm.other.with.overflow.i64)
+    %w(uadd sadd usub ssub umul smul).each do |operation|
+      %w(i7 i10 i24 i256 i0 i01 i66 i9evil i64evil i64.extra v2i64 nxv2i64 i64x2).each do |type|
+        invalid << "llvm.#{operation}.with.overflow.#{type}"
+      end
+      invalid << "llvm.#{operation}d.with.overflow.i64"
+      invalid << "llvm.#{operation}.with.overflows.i64"
+    end
+    %w(uadd usub umul smul).each do |operation|
+      %w(i9 i17 i33 i65 i129).each do |type|
+        invalid << "llvm.#{operation}.with.overflow.#{type}"
+      end
+    end
+    %w(sadd ssub).each do |operation|
+      %w(i10 i18 i34 i66 i130).each do |type|
+        invalid << "llvm.#{operation}.with.overflow.#{type}"
+      end
+    end
+    invalid.each do |name|
       ir = "declare void @#{name}()\ndefine i32 @main() {\n  call void @#{name}()\n  ret i32 0\n}\n"
       expect_raises(ArgumentError, /unapproved symbol/) { Native::Kernel::Verification.verify(ir) }
     end

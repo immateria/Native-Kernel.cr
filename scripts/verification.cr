@@ -5,10 +5,11 @@ module Native::Kernel::Verification
   ASM        = /\basm(?: sideeffect)? "((?:\\.|[^"\\])*)", "((?:\\.|[^"\\])*)"/
   INTRINSICS = %w(llvm.memcpy. llvm.memmove. llvm.memset. llvm.lifetime.start. llvm.lifetime.end. llvm.expect. llvm.smin. llvm.smax. llvm.experimental.cttz.elts.)
 
-  # Complete scalar overload names: Crystal's fixed widths and the floor's
-  # one-bit mixed-signedness widening (codegen/primitives.cr at both source pins).
-  # No arbitrary suffix, vector or scalable-vector admission follows from this.
-  OVERFLOW_INTRINSIC = /\Allvm\.(?:uadd|sadd|usub|ssub|umul|smul)\.with\.overflow\.i(?:8|9|16|17|32|33|64|65|128|129)\z/
+  # Exact overloads reached by the pinned compiler codegen/primitives.cr:
+  # 1.10 widens mixed-signedness addition/subtraction to signed iN+1, while its
+  # unsigned families and multiply paths stay at Crystal's fixed widths. 1.22
+  # uses fixed widths throughout. Do not admit the floor-only widths elsewhere.
+  OVERFLOW_INTRINSIC = /\Allvm\.(?:(?:uadd|usub|umul|smul)\.with\.overflow\.i(?:8|16|32|64|128)|(?:sadd|ssub)\.with\.overflow\.i(?:8|9|16|17|32|33|64|65|128|129))\z/
 
   private def self.symbol(line : String) : String?
     line.scan(TOKEN) { |match| return match[2] if match[1]? == "@" }
