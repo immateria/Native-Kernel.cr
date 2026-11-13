@@ -125,10 +125,16 @@ run does not qualify these additions.
 The source now adds `mach-send-timeout` as a thirteenth case for Darwin 24 and
 later. It reconstructs a bounded `mach_port_get_refs` exchange, proves
 `COPY_SEND` pseudo-receive accounting, and checks `MOVE_SEND` restoration after
-a full-queue timeout. This case is not locally executed on a long-lived host.
-Its first source-bound runtime result must come from the externally timed,
-ephemeral GitHub-hosted jobs; the older twelve-case receipts remain historical
-evidence for their exact source only.
+a full-queue timeout. It has not been executed locally on a long-lived host.
+Its first integrated source-bound runtime result is
+[hosted run 43371302629](https://github.com/immateria/Native-Kernel.cr/actions/runs/43371302629)
+at source `3dfe07a`: all eight native jobs and four forward replays passed the
+ordered 13-case roster in both modes with Crystal 1.10.0 and 1.22.2. The
+[dated evidence record](../docs/ci-results.md#mach-send-timeout-qualification-on-2026-11-12)
+keeps the exact host, receipt, artifact and provider-log identities. The older
+twelve-case receipts remain historical evidence for their exact source only;
+the new run does not qualify Darwin 21, descriptor/OOL restoration or the
+remaining failure-mutant campaign.
 
 The collection fixture also retains a successful write result across a close
 trap before checking it. Its optimized x86-64 build exposed the former `cc`

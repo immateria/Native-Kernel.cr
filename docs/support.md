@@ -121,6 +121,32 @@ checked by its separate eight-cell consumer run at `d4fcf3f`, using dependency
 [the consumer evidence and limits](ci-results.md#separate-consumer-qualification);
 the primitive suite alone does not establish these consumer results.
 
+## Mach timeout behavior qualification on 2026-11-12
+
+The later
+[hosted run 43371302629](https://github.com/immateria/Native-Kernel.cr/actions/runs/43371302629)
+at source `3dfe07abe04ec0928313b50a7d4d87f6dde01b8c` adds the unmanaged
+`mach-send-timeout` case to the existing macOS 15/26 profiles. All eight native
+cells and four same-architecture macOS-15-to-26 forward replays passed. Each
+profile ran Crystal 1.10.0 and 1.22.2, and each receipt records the ordered
+13-case roster in development and release modes. Execution was native ARM64 or
+native Intel x86-64, never translated.
+
+The case uses an owned ordinary receive right and a bounded simple message. It
+observes a post-copyin `COPY_SEND` timeout returning one additional user send
+reference, releases that reference and proves the count returns to baseline,
+then observes `MOVE_SEND` timeout restoration before explicit queue and task
+right cleanup. Both behavior artifacts passed the reachable-LLVM audit and
+empty undefined-import check before execution. The
+[dated CI record](ci-results.md#mach-send-timeout-qualification-on-2026-11-12)
+contains every receipt, artifact and provider-log identity.
+
+This adds behavior qualification to already admitted Darwin 24 and 25 profiles.
+It does not add a public API, lower the Darwin floor, qualify Darwin 21, cover
+descriptor or out-of-line pseudo-receive restoration, or replace the remaining
+failure-injection campaign. A successful hosted fixture also does not establish
+Process-Control policy or ownership beyond its separate consumer receipts.
+
 ## Process additions on 2026-11-11
 
 The typed process surface adds `setpgid`, `getpgid` and `getsid`. The existing

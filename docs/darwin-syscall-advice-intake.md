@@ -115,7 +115,7 @@ profile before implementation.
 | `darwin-lock-lifetime` | BSD 92 `fcntl` | `F_OFD_SETLK` versus `F_SETLK` ownership lifetime | Record command/lifetime evidence; leave lock policy to File-Lock/Filesystem consumers. |
 | `darwin-pty-controlling-terminal` | composed library/kernel path | `forkpty`, session, group, `/dev/tty`, foreground group and descriptor postconditions | Record consumer evidence only; no synthetic `forkpty` syscall row. |
 | `darwin-connectx-deferred` | BSD 447 `connectx` | `CONNECT_RESUME_ON_READ_WRITE` | Record loopback observation; no general network or early-data claim. |
-| `darwin-mach-send-timeout` | libSystem `mach_msg` transport; raw trap slots `-31`/`-47` are source-mapped but were not both runtime-exercised | `MACH_SEND_TIMED_OUT`, `MOVE_SEND` pseudo-receive, returned header/right ownership | Add to the Mach ownership queue and qualify with a separate unmanaged Crystal case. |
+| `darwin-mach-send-timeout` | libSystem `mach_msg` transport; raw trap slots `-31`/`-47` are source-mapped but were not both runtime-exercised by the Skill probe | `MACH_SEND_TIMED_OUT`, `COPY_SEND` and `MOVE_SEND` pseudo-receive, returned header/right ownership | Implemented as the separate unmanaged `mach-send-timeout` case and hosted-qualified for the recorded Darwin 24/25 profiles; descriptor/OOL restoration and Darwin 21 remain unqualified. |
 
 ## Applied intake
 
@@ -136,6 +136,40 @@ consumer check passed 130 examples. A runner contract also gained enough time
 for a translated Python child to emit its bounded-output fixture before the
 intentional timeout; the timeout, process-group cleanup and truncation
 expectations did not change.
+
+The `mach-send-timeout` intake was implemented at source
+`3dfe07abe04ec0928313b50a7d4d87f6dde01b8c`. Its source-bound files have these
+receipt identities:
+
+| Source | SHA-256 |
+| ------ | ------- |
+| `.github/workflows/macos.yml` | `6197b5984b1621a04e43e7c71d30566c886fa02fcc808b15798da62c5aca7065` |
+| `ci/cases.json` | `fd25018948622b61dc2e337913cbafb5d234154b60b4603cbf22816a71edf874` |
+| `scripts/ci/runner.py` | `3584a0219b318c5f94f3734992d50e5c98ebaaeb2a8f6ad6dd612afd8618e97e` |
+| `spec/native/behavior.cr` | `36b68e51476fe9b7ecee78623ac81755f6da02fd682c10130647b02c02045035` |
+| `spec/native/behavior/mach_send_timeout.cr` | `ad2b2f9d1136ac3f839375915b2b45c6ce07360f5068ca6a928bbe55aabbf647` |
+| `spec/mach_send_timeout_spec.cr` | `84d158a98988260be629591ecd04c0d3c769fe9162ed5c8bf49adba905ebefe1` |
+| `tests/test_ci_runner.py` | `0cdc8252af436e6852bfa0b24aa30a9fbd66369683b8c193840101f5a3dccc50` |
+
+[Hosted run 43371302629](https://github.com/immateria/Native-Kernel.cr/actions/runs/43371302629)
+passed the exact ordered 13-case roster in development and release modes on
+native ARM64 and Intel x86-64 macOS 15 and 26, with Crystal 1.10.0 and 1.22.2.
+The four same-architecture forward jobs replayed the macOS 15 artifacts on
+macOS 26 without rebuilding. All 24 saved `mach-send-timeout` outputs match the
+exact success payload; no execution was translated. The provider run record
+hashes to
+`231673aded3f186f1bdc559902ffd66916d68da53ad5e1ea2975d747f0cc03db`,
+and its complete provider log archive hashes to
+`62eadacbcae49f6842893dbecf6a49c50d7a534a7f84225bc0fc1bf750e1e869`.
+The [dated CI record](ci-results.md#mach-send-timeout-qualification-on-2026-11-12)
+lists all 12 receipt and artifact ZIP identities.
+
+This is hosted native runtime evidence for Native-Kernel's bounded simple
+message case, independent of the Skill's C probe result. The fixture was not
+executed on the reviewer's long-lived Mac. Failure injection still needs to
+prove each cleanup action and ambiguous-ownership branch. Descriptor/OOL
+partial restoration, Darwin 21, a generic Mach messaging API and any public
+support-floor change remain outside this result.
 
 ## Useful source expansion
 
