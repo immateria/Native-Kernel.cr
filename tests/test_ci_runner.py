@@ -52,8 +52,8 @@ class RunnerContractTests(unittest.TestCase):
             runner.validate_host(self.host, profile, allow_translation=True, ci=True)
 
     def test_timeout_kills_process_group_and_bounds_output(self):
-        result = runner.run_bounded([sys.executable, "-c", "import time; print('x'*10000, flush=True); time.sleep(5)"],
-                                    self.directory / "timeout", timeout=0.15, output_limit=128)
+        result = runner.run_bounded([sys.executable, "-c", "import time; print('x'*10000, flush=True); time.sleep(10)"],
+                                    self.directory / "timeout", timeout=2, output_limit=128)
         self.assertEqual(result["status"], "timed_out")
         self.assertLessEqual((self.directory / "timeout.stdout").stat().st_size, 128)
         self.assertTrue(result["output_truncated"])

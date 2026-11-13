@@ -10,12 +10,13 @@ module Native::Kernel::Darwin
   # kevent64 uses the same layout on arm64 and x86-64. Use it without
   # redeclaring the stdlib's version-dependent kevent binding.
   module Event
-    EVFILT_PROC =         -5_i16
-    EV_ADD      =     0x0001_u16
-    EV_ONESHOT  =     0x0010_u16
-    EV_ERROR    =     0x4000_u16
-    NOTE_EXIT   = 0x80000000_u32
-    IMMEDIATE   =   0x000001_u32
+    EVFILT_PROC   =         -5_i16
+    EVFILT_SIGNAL =         -6_i16
+    EV_ADD        =     0x0001_u16
+    EV_ONESHOT    =     0x0010_u16
+    EV_ERROR      =     0x4000_u16
+    NOTE_EXIT     = 0x80000000_u32
+    IMMEDIATE     =   0x000001_u32
 
     struct Kevent64
       property ident : UInt64 = 0_u64

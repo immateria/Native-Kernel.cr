@@ -7,6 +7,7 @@ require "./spec_helper"
       offsetof(Darwin::Event::Kevent64, @filter).should eq(8)
       offsetof(Darwin::Event::Kevent64, @data).should eq(16)
       offsetof(Darwin::Event::Kevent64, @ext).should eq(32)
+      Darwin::Event::EVFILT_SIGNAL.should eq(-6_i16)
       sizeof(Darwin::Process::Info::Short).should eq(64)
       sizeof(Darwin::Process::Info::Bsd).should eq(136)
       sizeof(Darwin::Process::Info::Unique).should eq(56)

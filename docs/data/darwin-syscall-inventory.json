@@ -1,0 +1,100 @@
+{
+  "active_logical_rows": 533,
+  "active_numeric_slots": 525,
+  "active_parse_warning_rows": 2,
+  "corrected_snapshot_rows_all_statuses": 845,
+  "coverage_states": {
+    "raw_entry_only": 473,
+    "typed_wrapper": 44,
+    "unsupported_entry_family": 16
+  },
+  "exact_source_correction": {
+    "commit": "ac9718fb1af618d5ce8678d0dc6e8a58f252216f",
+    "history_export_input_commit": "f6217f891ac0bb64f3d375211650a4c1ff8ca1ea",
+    "history_export_label_mismatch": true,
+    "history_export_source_hashes_replaced": {
+      "osfmk/arm64/machine_routines.c": "e2563cb3908b110497fb2002773c8ad222283fa7b63afdd9e094eae63e525b8b",
+      "osfmk/kern/syscall_sw.c": "3dd906c21aba6e2f195710b877587de739ea2836bf60e834aba8180baad15d3d"
+    },
+    "replaced_families": [
+      "mach",
+      "machdep/arm64",
+      "diagnostic"
+    ],
+    "snapshot_id": "xnu-12377.121.6",
+    "source_manifest": {
+      "defs_file_count": 85,
+      "file_count": 99,
+      "path": "darwin-xnu-source-manifest-xnu-12377.121.6.json",
+      "schema_version": 1,
+      "sha256": "bbbffae6908790a68fbba6821d42e81cb7902f4ef4dab4d18db8f11716e74131"
+    },
+    "verified_direct_file_sha256": {
+      "bsd/kern/syscalls.master": "7e866891439ad5b3464777d2cacc3b82fc2e7f439fb5a8686c3e6f160d5aeab5",
+      "bsd/sys/proc_info.h": "a4eb26cdfd3721b111f9979455d80a854625b0ef96ba4de1a4e7705f462e0f84",
+      "bsd/sys/proc_info_private.h": "4f8a8290fb644349521befe852fbaebf1a2d3a9355b0937f45ce1d89a3906a73",
+      "libsyscall/Libsyscall.xcodeproj/project.pbxproj": "8f9f38b7847bd9195ba4d94d9c78f56024ad72279064a6e4afbe5e6bca59eef2",
+      "libsyscall/xcodescripts/mach_install_mig.sh": "e987edd2b4dacf7807b6e6f46badc0b02aa6bfaaac0fb8a5fa7d5e02d5785a3f",
+      "makedefs/MakeInc.cmd": "c7388f2e45bed81c4d98223888716d273afcaf015ef67d3d51ccacc6728c8551",
+      "makedefs/MakeInc.def": "36f6f4ed246da4d26bb4ffb6935de6160a276561c87a7cb8e19aaacc494eb29f",
+      "osfmk/arm64/machine_routines.c": "a1eb04ef6e17b597fbfedc41ff84558dcda18768fdb4f59f0dda242f9267800e",
+      "osfmk/arm64/proc_reg.h": "fcbead4162ad09d0f51be9ce88e5f2d6d89e89e58934975ee1aa23e506485055",
+      "osfmk/i386/Diagnostics.c": "e5c7bcad6f97f72d36d0b72bf17c0a9850aa972c37f31daaffc12506864c68d1",
+      "osfmk/i386/Diagnostics.h": "9d8ad11cabacf5af680150a35daf515446cf23350b85c36cc96c0c29698c0218",
+      "osfmk/i386/machdep_call.c": "ca7fe53e0e7c6bc472340f787a0fba99a7733f24c4b130e57f42ed9b815540a6",
+      "osfmk/kern/syscall_sw.c": "9c84c9ea109067bbdac35c4ddcb3de872c228a7cfff51b72a6d5a109fc431820",
+      "osfmk/mach/Makefile": "2f9f440ed587a9282101cf00697d402ace65ecb40c3080c8e2874e66a6ba80a2"
+    }
+  },
+  "family_counts": {
+    "bsd": {
+      "active_logical_rows": 455,
+      "active_numeric_slots": 455,
+      "gap_rows": 419,
+      "typed_wrapper_rows": 36
+    },
+    "diagnostic": {
+      "active_logical_rows": 5,
+      "active_numeric_slots": 1,
+      "gap_rows": 5,
+      "typed_wrapper_rows": 0
+    },
+    "mach": {
+      "active_logical_rows": 62,
+      "active_numeric_slots": 62,
+      "gap_rows": 54,
+      "typed_wrapper_rows": 8
+    },
+    "machdep": {
+      "active_logical_rows": 11,
+      "active_numeric_slots": 7,
+      "gap_rows": 11,
+      "typed_wrapper_rows": 0
+    }
+  },
+  "gap_rows": 489,
+  "generation": {
+    "active_rule": "status == active",
+    "coverage_rule": "numeric Raw.call literals or Syscall::Number/Mach::Trap calls in src/native-kernel/darwin",
+    "mig_role_rule": "kernel build variables and libsyscall header-export lists; not configuration-resolved routine availability",
+    "policy_classification": "none; unimplemented primary entries remain unreviewed",
+    "proc_info_implemented_rule": "issued through a shipped typed mechanism with a named source or positive-spec witness",
+    "script": "scripts/catalog/darwin_syscall_inventory.py",
+    "secondary_candidate_rule": "BSD prototype parameters with selector-like names; heuristic and non-exhaustive",
+    "source_admission_rule": "tracked path/role/SHA-256 manifest plus exact .defs roster, validated before parsing"
+  },
+  "history_snapshot_rows_all_statuses": 843,
+  "mig_kernel_build_subsystem_rows": 37,
+  "mig_libsyscall_export_subsystem_rows": 17,
+  "mig_production_subsystem_rows": 49,
+  "mig_subsystem_rows": 52,
+  "proc_info_catalog_rows": 94,
+  "proc_info_implemented_rows": 14,
+  "schema_version": 5,
+  "secondary_catalog_candidate_rows": 218,
+  "snapshot_id": "xnu-12377.121.6",
+  "source_archive": "darwin-xnu-syscall-history-first-pass.zip",
+  "source_archive_sha256": "d6324bdc100c65f94396e2458b3f2dbe199d2fcc2e18d6c1cfd05f9fab94ee16",
+  "source_member": "darwin-xnu-syscall-history-first-pass/output/latest_snapshot_entries.csv",
+  "typed_wrapper_rows": 44
+}

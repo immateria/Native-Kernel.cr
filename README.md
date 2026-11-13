@@ -58,6 +58,15 @@ profiles](docs/support.md) before using kernel interfaces.
 
 The [Darwin process notes](docs/darwin-process.md) cover numeric group/session
 operations and the restricted private spawn layouts for Darwin 21, 24 and 25.
+The [Darwin syscall and operation landscape](docs/darwin-syscall-landscape.md)
+tracks all 533 active logical entries in the latest reviewed XNU snapshot, the
+489 entries outside the current typed primary surface, and the secondary
+selector audit queue needed before generic integer operations become deliberate
+APIs. Its completeness boundary distinguishes exact dispatch-table projection
+from the unfinished Mach-message, structured-selector and provider catalogs.
+The [Syscall Advice intake](docs/darwin-syscall-advice-intake.md) records how
+evolving external source reviews and native C probes feed that queue without
+becoming ABI authority, Crystal qualification or a runtime dependency.
 The [Darwin 21 foundations audit](docs/darwin-monterey-foundations.md) records
 the non-shipping nearby source pin, exact ABI evidence, build handoff and native
 qualification gates.
