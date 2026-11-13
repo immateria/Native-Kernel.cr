@@ -1,8 +1,68 @@
 # Hosted CI evidence
 
-Reviewed on 2026-11-12. A result applies to its recorded source and actual host;
+Reviewed on 2026-11-13. A result applies to its recorded source and actual host;
 it does not certify every release in an OS major. The profile inventory remains
 separate from these executed observations.
+
+## Mach timeout cleanup requalification on 2026-11-13
+
+[Run 43375157798](https://github.com/immateria/Native-Kernel.cr/actions/runs/43375157798)
+requalified commit `6842fd49b5f1dcb9b0707bb73b283ae34f44ba19` after the
+fixture's ownership controller was separated from its stateless raw-call
+adapter. The managed controller suite can now inject every operation result
+without invoking Mach. It covers pre- and post-copyin `COPY_SEND` failure,
+ambiguous restoration, consumed and restored `MOVE_SEND` ownership, malformed
+MIG replies, receive failure and each cleanup channel. All 17 focused examples
+passed on Crystal 1.10.0 and 1.22.2, and all 15 focused mutants were killed.
+
+The changed production specialization was compiled but not executed locally in
+eight development/release, ARM64/x86-64 and current/floor combinations. Every
+artifact passed reachable-LLVM review and had an empty undefined-import table.
+The complete local suites passed 64 Crystal examples on both compilers, 176
+Python contracts with one intentional Linux-only skip, and Process-Control's
+130-example consumer gate. The ordinary Native-Kernel core probe passed locally;
+the raw `mach-send-timeout` fixture did not run on the long-lived local Mac.
+
+The hosted run passed the same eight native and four forward cells as the first
+integrated result. The actual hosts remained macOS 15.8.2 ARM64 build 24H232,
+macOS 15.7.9 Intel build 24G830, macOS 26.7.2 ARM64 build 25G332, and macOS
+26.6.1 Intel build 25G76. Both compiler versions passed on every native host,
+and no execution was translated. The independent receipt review again verified
+the ordered 13-case roster in development and release modes, 24 exact
+`mach-send-timeout` outputs, 72 empty undefined-import reports and 16 successful
+behavior LLVM audits.
+
+| Class / profile / compiler | GitHub job | Receipt SHA-256 | Artifact ZIP SHA-256 |
+| --- | ---: | --- | --- |
+| Native macOS 15 ARM64 / 1.10.0 | `131719808435` | `d24c6e06a6b4709bf2edf240b4e5c8625746f6ce232b52f39aef782b0445d038` | `c4c3355855ea4c71b5bec8ce6a6b4fd5ee25233c5eac26e32bf21273a275e587` |
+| Native macOS 15 ARM64 / 1.22.2 | `131719807966` | `1137ebc97a0bb0197766790577a70d2d18094f7d1e5e0b1d0e3c6d62190103d2` | `197cf41c4a6a67ea058c874c1be89c1a143480769a745a244b41a275b607bb64` |
+| Native macOS 15 x86-64 / 1.10.0 | `131719808310` | `9139a81c5db6f51396280188142ff6b3e94c936b30660c00552427b2a2df68fc` | `fb97b62cbf89f1f184f799f7eb7afa5756d12edb5fbabb4652e8d3d0fdadea01` |
+| Native macOS 15 x86-64 / 1.22.2 | `131719808462` | `5da9c318cd24b811157f316cffbb8486afd523a0aca0ef4effe9b66f6d895082` | `fdb8b6098d280eba09ef03160765c769fd6caacdd6225a073e4dfba4bda1c9a5` |
+| Native macOS 26 ARM64 / 1.10.0 | `131719808338` | `29fb14256da9401744763e212254e0d7bfe6dc79e2bd28909b15379c329ab1d0` | `67b2ebd3996945bd7cac27d7cfc9443550bf12c5510b98295f6446b116af2358` |
+| Native macOS 26 ARM64 / 1.22.2 | `131719808400` | `5c3cc59c71afcfa0b0b1806db632f9403eb26e3f07dfce03dfc2f8a263f9c406` | `b076d26700528f0e2526bbd6c1f71b7c4208fdb250117f51aec8e5963c5b8790` |
+| Native macOS 26 x86-64 / 1.10.0 | `131719808443` | `eff2f8c01ad6f152b66985fc3a8934acb2277dbc6bed3ec74ceba1e754762aae` | `3bab9cf5081fc872b033812b7e6135410e8b840adf2961109313db729e161f50` |
+| Native macOS 26 x86-64 / 1.22.2 | `131719808291` | `fc15d783775ef1f39e840b3d27f6944cd0c8976b37726fb933ae82ce42ad8201` | `8728546c43fc1a39b8ec2436334a36c2731af59de3882abd166f5b085f1354b4` |
+| Forward ARM64 / 1.10.0 | `131721888666` | `399af6783d0f3931a0b0dffad7c5bdc576c5cf603d2641e8fd9e30e51d770fab` | `5f8771b629bc7cd59cc25f27dc6aedbdb7508fe5e5667f64b54e24272308038d` |
+| Forward ARM64 / 1.22.2 | `131721888687` | `0c5b7e0f4edb63d7e478cf13397964b40a1df7d71b26ec83072028a20ccfe021` | `486759d4ba4a77252e8a0890b4bda36d2447e42c647afa1684d4bbc4e32053b3` |
+| Forward x86-64 / 1.10.0 | `131721888795` | `89eda1198499282a81bdaf15efce24aadbeda7f477e22035ce46f800988b1277` | `b15b374f3eec38e2d427a0ff54e4f76347d362f4dbf8ea5380cecbe1d575156e` |
+| Forward x86-64 / 1.22.2 | `131721888739` | `9aec379d298ed7ac223e4b94fabeb558fbf852a2ae1c5067eb9e5a2b777f1950` | `3299d07e736b1ac08363953d9875dbb53078382b57616e4bb60b8f2b21e95e13` |
+
+The provider run record hashes to
+`39b950911196af76e360cd65214a52c391c02baa71ff80a733c6326558441838`;
+its 136-entry provider log archive is valid ZIP data and hashes to
+`ebb6bf8d4fab23cfb1a88724ed95b0d7b7b9db17bf0bc395b2497a4e833e1f49`.
+Independent verification matched all 1,688 declared bundle-file hashes, all 12
+core manifests and all four forward-origin receipt, source, compiler and
+executable bindings. The external verification result hashes to
+`e8e9f02aa7ad75840c266f6a30fa97391655129ae20c03d3de26bd1e876c0612`.
+The separate Linux regression
+[run 43375157843](https://github.com/immateria/Native-Kernel.cr/actions/runs/43375157843)
+also passed all four architecture/compiler cells at the same commit.
+
+This closes the planned simple-message failure-injection campaign and
+requalifies the resulting source on the recorded Darwin 24 and 25 hosts. It
+still does not qualify Darwin 21, descriptor/OOL pseudo-receive restoration or
+a public generic Mach messaging API.
 
 ## Mach send-timeout qualification on 2026-11-12
 

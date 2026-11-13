@@ -142,10 +142,21 @@ empty undefined-import check before execution. The
 contains every receipt, artifact and provider-log identity.
 
 This adds behavior qualification to already admitted Darwin 24 and 25 profiles.
-It does not add a public API, lower the Darwin floor, qualify Darwin 21, cover
-descriptor or out-of-line pseudo-receive restoration, or replace the remaining
-failure-injection campaign. A successful hosted fixture also does not establish
-Process-Control policy or ownership beyond its separate consumer receipts.
+It does not add a public API, lower the Darwin floor, qualify Darwin 21 or cover
+descriptor or out-of-line pseudo-receive restoration. A successful hosted
+fixture also does not establish Process-Control policy or ownership beyond its
+separate consumer receipts.
+
+The failure-injection campaign was completed on 2026-11-13 at source
+`6842fd49b5f1dcb9b0707bb73b283ae34f44ba19`. Seventeen focused controller
+examples passed on Crystal 1.10.0 and 1.22.2, and all 15 ownership and cleanup
+mutants were killed. The exact changed source then passed all eight native and
+four forward cells in
+[run 43375157798](https://github.com/immateria/Native-Kernel.cr/actions/runs/43375157798).
+The [source-bound record](ci-results.md#mach-timeout-cleanup-requalification-on-2026-11-13)
+keeps the receipt and artifact identities. The raw fixture still was not run on
+the reviewer's long-lived Mac, and the Darwin 21 and descriptor/OOL boundaries
+above remain unchanged.
 
 ## Process additions on 2026-11-11
 

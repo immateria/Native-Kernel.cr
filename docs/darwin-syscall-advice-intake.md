@@ -166,10 +166,30 @@ lists all 12 receipt and artifact ZIP identities.
 
 This is hosted native runtime evidence for Native-Kernel's bounded simple
 message case, independent of the Skill's C probe result. The fixture was not
-executed on the reviewer's long-lived Mac. Failure injection still needs to
-prove each cleanup action and ambiguous-ownership branch. Descriptor/OOL
-partial restoration, Darwin 21, a generic Mach messaging API and any public
-support-floor change remain outside this result.
+executed on the reviewer's long-lived Mac. Descriptor/OOL partial restoration,
+Darwin 21, a generic Mach messaging API and any public support-floor change
+remain outside this result.
+
+Source `6842fd49b5f1dcb9b0707bb73b283ae34f44ba19` completed the separate
+failure-injection work. A stateless production adapter preserves the direct raw
+calls while a managed scripted adapter drives the complete ownership controller.
+Seventeen focused examples cover pre- and post-copyin `COPY_SEND` failure,
+ambiguous restoration, consumed and restored `MOVE_SEND` ownership, malformed
+MIG replies, receive failure and every cleanup-result channel. They passed on
+Crystal 1.10.0 and 1.22.2, and all 15 focused mutants were killed. The changed
+files hash to:
+
+| Source | SHA-256 |
+| ------ | ------- |
+| `spec/native/behavior/mach_send_timeout.cr` | `8a15e3dceab3f93c1705c05a2a5a0b57c73fe0380d88c8accbd7b91fbc0ce732` |
+| `spec/mach_send_timeout_spec.cr` | `053d09d767339a59733438a275594eaf228c7df966b53659eebeddc82a798e92` |
+| `spec/mach_send_timeout_mutants.zsh` | `f18899aee3f407a5d2ff813705122c3f86af2fc0c93a06026ed10bea3582c4a1` |
+
+[Hosted run 43375157798](https://github.com/immateria/Native-Kernel.cr/actions/runs/43375157798)
+then requalified the exact source in all eight native and four forward macOS
+cells. The
+[dated cleanup record](ci-results.md#mach-timeout-cleanup-requalification-on-2026-11-13)
+contains the receipt, artifact and provider-log identities.
 
 ## Useful source expansion
 

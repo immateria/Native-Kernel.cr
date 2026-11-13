@@ -130,11 +130,12 @@ Its first integrated source-bound runtime result is
 [hosted run 43371302629](https://github.com/immateria/Native-Kernel.cr/actions/runs/43371302629)
 at source `3dfe07a`: all eight native jobs and four forward replays passed the
 ordered 13-case roster in both modes with Crystal 1.10.0 and 1.22.2. The
-[dated evidence record](../docs/ci-results.md#mach-send-timeout-qualification-on-2026-11-12)
-keeps the exact host, receipt, artifact and provider-log identities. The older
-twelve-case receipts remain historical evidence for their exact source only;
-the new run does not qualify Darwin 21, descriptor/OOL restoration or the
-remaining failure-mutant campaign.
+[subsequent cleanup requalification](../docs/ci-results.md#mach-timeout-cleanup-requalification-on-2026-11-13)
+at source `6842fd4` passed the same matrix after all 15 ownership-controller
+mutants were killed. The dated records keep the exact host, receipt, artifact
+and provider-log identities. The older twelve-case receipts remain historical
+evidence for their exact source only; neither newer run qualifies Darwin 21,
+descriptor/OOL restoration or a public generic Mach messaging API.
 
 The collection fixture also retains a successful write result across a close
 trap before checking it. Its optimized x86-64 build exposed the former `cc`
