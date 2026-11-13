@@ -30,6 +30,64 @@ module Behavior
     Uncertain
   end
 
+  # The production specialization is a stateless, compile-time adapter. Tests
+  # supply a scripted adapter to exercise cleanup wiring without invoking Mach.
+  # Crystal specializes the generic fixture for this value type, so the native
+  # artifact retains direct raw calls rather than an indirect operations table.
+  struct MachSendSystem
+    def task_self : Int64
+      Darwin::Raw.call(-28).primary
+    end
+
+    def allocate_receive(task : UInt32, destination : Pointer(UInt32)) : Int32
+      Darwin::Raw.call(-16, task.to_u64, MACH_PORT_RIGHT_RECEIVE,
+        destination.address).primary.to_i32!
+    end
+
+    def insert_send(task : UInt32, destination : UInt32) : Int32
+      Darwin::Raw.call(-21, task.to_u64, destination.to_u64,
+        destination.to_u64, MACH_MSG_TYPE_MAKE_SEND).primary.to_i32!
+    end
+
+    def reply_receive : Int64
+      Darwin::Raw.call(-26).primary
+    end
+
+    def get_refs_exchange(words : Pointer(UInt32), task : UInt32, reply : UInt32) : Int32
+      Darwin::Raw.call(-47, words.address,
+        MACH64_SEND_KOBJECT_CALL | MACH_SEND_MSG | MACH_RCV_MSG | MACH_SEND_TIMEOUT | MACH_RCV_TIMEOUT,
+        0x1513_u64 | 40_u64.unsafe_shl(32),
+        task.to_u64 | reply.to_u64.unsafe_shl(32),
+        MACH_GET_REFS_REQUEST.to_u64.unsafe_shl(32),
+        reply.to_u64.unsafe_shl(32), 128_u64, 1000_u64).primary.to_i32!
+    end
+
+    def remove_receive(task : UInt32, name : UInt32) : Int32
+      Darwin::Raw.call(-19, task.to_u64, name.to_u64,
+        MACH_PORT_RIGHT_RECEIVE, UInt64::MAX).primary.to_i32!
+    end
+
+    def send_message(words : Pointer(UInt32), destination : UInt32,
+                     disposition : UInt32, identifier : UInt32) : Int32
+      Darwin::Raw.call(-47, words.address,
+        MACH64_SEND_MQ_CALL | MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+        disposition.to_u64 | MACH_MESSAGE_BYTES.to_u64.unsafe_shl(32),
+        destination.to_u64, identifier.to_u64.unsafe_shl(32),
+        0_u64, 0_u64, 0_u64).primary.to_i32!
+    end
+
+    def receive_message(words : Pointer(UInt32), destination : UInt32) : Int32
+      Darwin::Raw.call(-47, words.address,
+        MACH64_SEND_MQ_CALL | MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+        0_u64, 0_u64, 0_u64, destination.to_u64.unsafe_shl(32),
+        MACH_RECEIVE_BYTES, 1000_u64).primary.to_i32!
+    end
+
+    def release_send(task : UInt32, name : UInt32) : Int32
+      Darwin::Raw.call(-18, task.to_u64, name.to_u64).primary.to_i32!
+    end
+  end
+
   # Pure transitions keep the pre-copyin, pseudo-receive and uncertain states
   # independently mutation-testable without injecting a live kernel message.
   def self.mach_copy_send_ownership(original_header_valid : Bool,
@@ -91,8 +149,8 @@ module Behavior
 
   # Returns {refs, operation, reply-right cleanup, valid scalar reply}. The
   # dedicated reply receive right is retired after every bounded exchange.
-  private def self.mach_send_refs(task : UInt32, name : UInt32) : Tuple(UInt32, Int32, Int32, Bool)
-    reply_value = Darwin::Raw.call(-26).primary
+  private def self.mach_send_refs(ops : T, task : UInt32, name : UInt32) : Tuple(UInt32, Int32, Int32, Bool) forall T
+    reply_value = ops.reply_receive
     return {0_u32, 6, 0, false} if reply_value <= 0 || reply_value > UInt32::MAX
     reply = reply_value.to_u32!
 
@@ -107,14 +165,8 @@ module Behavior
     words[8] = name
     words[9] = MACH_PORT_RIGHT_SEND
 
-    operation = Darwin::Raw.call(-47, words.address,
-      MACH64_SEND_KOBJECT_CALL | MACH_SEND_MSG | MACH_RCV_MSG | MACH_SEND_TIMEOUT | MACH_RCV_TIMEOUT,
-      0x1513_u64 | 40_u64.unsafe_shl(32),
-      task.to_u64 | reply.to_u64.unsafe_shl(32),
-      MACH_GET_REFS_REQUEST.to_u64.unsafe_shl(32),
-      reply.to_u64.unsafe_shl(32), 128_u64, 1000_u64).primary.to_i32!
-    reply_cleanup = Darwin::Raw.call(-19, task.to_u64, reply.to_u64,
-      MACH_PORT_RIGHT_RECEIVE, UInt64::MAX).primary.to_i32!
+    operation = ops.get_refs_exchange(words, task, reply)
+    reply_cleanup = ops.remove_receive(task, reply)
     return {0_u32, operation, reply_cleanup, false} unless operation == 0
 
     refs, decoded, valid = mach_get_refs_reply(words)
@@ -136,19 +188,15 @@ module Behavior
     words[6] = value
   end
 
-  private def self.mach_send_message(words : Pointer(UInt32), destination : UInt32,
+  private def self.mach_send_message(ops : T, words : Pointer(UInt32), destination : UInt32,
                                      disposition : UInt32, identifier : UInt32,
-                                     value : UInt32) : Int32
+                                     value : UInt32) : Int32 forall T
     prepare_mach_message(words, destination, disposition, identifier, value)
-    Darwin::Raw.call(-47, words.address,
-      MACH64_SEND_MQ_CALL | MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-      disposition.to_u64 | MACH_MESSAGE_BYTES.to_u64.unsafe_shl(32),
-      destination.to_u64, identifier.to_u64.unsafe_shl(32),
-      0_u64, 0_u64, 0_u64).primary.to_i32!
+    ops.send_message(words, destination, disposition, identifier)
   end
 
-  private def self.mach_release_send(task : UInt32, name : UInt32) : Int32
-    Darwin::Raw.call(-18, task.to_u64, name.to_u64).primary.to_i32!
+  private def self.mach_release_send(ops : T, task : UInt32, name : UInt32) : Int32 forall T
+    ops.release_send(task, name)
   end
 
   # This case intentionally has no general Mach-message abstraction. It owns
@@ -156,6 +204,10 @@ module Behavior
   # On uncertain pseudo-receive ownership it does not guess a reference delta;
   # the disposable GitHub runner contains the remaining process namespace.
   def self.mach_send_timeout : Int32
+    mach_send_timeout_with(MachSendSystem.new)
+  end
+
+  def self.mach_send_timeout_with(ops : T) : Int32 forall T
     primary_error = 0
     reply_cleanup_error = 0
     extra_cleanup_error = 0
@@ -172,7 +224,7 @@ module Behavior
     buffer = StaticArray(UInt32, 32).new(0_u32)
     words = buffer.to_unsafe
 
-    task_value = Darwin::Raw.call(-28).primary
+    task_value = ops.task_self
     if task_value <= 0 || task_value > UInt32::MAX
       primary_error = 170
     else
@@ -181,8 +233,7 @@ module Behavior
     end
 
     if primary_error == 0
-      allocated = Darwin::Raw.call(-16, task.to_u64, MACH_PORT_RIGHT_RECEIVE,
-        pointerof(destination).address).primary.to_i32!
+      allocated = ops.allocate_receive(task, pointerof(destination))
       if allocated != 0 || destination == 0_u32 || destination == UInt32::MAX
         primary_error = 171
       else
@@ -191,8 +242,7 @@ module Behavior
     end
 
     if primary_error == 0
-      inserted = Darwin::Raw.call(-21, task.to_u64, destination.to_u64,
-        destination.to_u64, MACH_MSG_TYPE_MAKE_SEND).primary.to_i32!
+      inserted = ops.insert_send(task, destination)
       if inserted != 0
         primary_error = 172
       else
@@ -201,7 +251,7 @@ module Behavior
     end
 
     if primary_error == 0
-      refs, operation, reply_cleanup, valid = mach_send_refs(task, destination)
+      refs, operation, reply_cleanup, valid = mach_send_refs(ops, task, destination)
       reply_cleanup_error = reply_cleanup if reply_cleanup != 0
       if operation != 0 || !valid
         primary_error = 173
@@ -214,7 +264,7 @@ module Behavior
 
     filled = 0_u32
     while primary_error == 0 && filled < MACH_PORT_QLIMIT_DEFAULT
-      result = mach_send_message(words, destination, MACH_MSG_TYPE_COPY_SEND,
+      result = mach_send_message(ops, words, destination, MACH_MSG_TYPE_COPY_SEND,
         MACH_FILLER_ID &+ filled, MACH_FILLER_VALUE &+ filled)
       if result == 0
         filled &+= 1_u32
@@ -222,7 +272,7 @@ module Behavior
         # A failed COPY_SEND can preserve only the original reference or can
         # pseudo-receive a second reference after copyin. Classify the count
         # before cleanup; never infer it from the native result alone.
-        refs, operation, reply_cleanup, valid = mach_send_refs(task, destination)
+        refs, operation, reply_cleanup, valid = mach_send_refs(ops, task, destination)
         reply_cleanup_error = reply_cleanup if reply_cleanup_error == 0 && reply_cleanup != 0
         # Successful copyin converts COPY_SEND to the received PORT_SEND type,
         # whose user-visible numeric value is MOVE_SEND.
@@ -236,11 +286,11 @@ module Behavior
     end
 
     if primary_error == 0
-      result = mach_send_message(words, destination, MACH_MSG_TYPE_COPY_SEND,
+      result = mach_send_message(ops, words, destination, MACH_MSG_TYPE_COPY_SEND,
         0x5200_u32, 0x6200_u32)
       original_header, restored_header = mach_send_header_states(words, destination,
         0x5200_u32, 0x6200_u32)
-      refs, operation, reply_cleanup, valid = mach_send_refs(task, destination)
+      refs, operation, reply_cleanup, valid = mach_send_refs(ops, task, destination)
       reply_cleanup_error = reply_cleanup if reply_cleanup_error == 0 && reply_cleanup != 0
       ownership = mach_copy_send_ownership(original_header, restored_header,
         valid && operation == 0, refs)
@@ -261,7 +311,7 @@ module Behavior
     end
 
     if primary_error == 0 && extra_send_owned
-      released = mach_release_send(task, destination)
+      released = mach_release_send(ops, task, destination)
       # Never retry a failed deallocation: its resulting ownership is unknown.
       extra_send_owned = false
       if released != 0
@@ -271,7 +321,7 @@ module Behavior
     end
 
     if primary_error == 0
-      refs, operation, reply_cleanup, valid = mach_send_refs(task, destination)
+      refs, operation, reply_cleanup, valid = mach_send_refs(ops, task, destination)
       reply_cleanup_error = reply_cleanup if reply_cleanup_error == 0 && reply_cleanup != 0
       if operation != 0 || !valid
         primary_error = 183
@@ -283,7 +333,7 @@ module Behavior
     end
 
     if primary_error == 0
-      result = mach_send_message(words, destination, MACH_MSG_TYPE_MOVE_SEND,
+      result = mach_send_message(ops, words, destination, MACH_MSG_TYPE_MOVE_SEND,
         0x5300_u32, 0x6300_u32)
       # MOVE_SEND consumes the known reference during copyin. It becomes owned
       # again only after timeout, returned-header and exact-count validation.
@@ -295,7 +345,7 @@ module Behavior
       elsif words[2] != destination || words[0] & 0xff_u32 != MACH_MSG_TYPE_MOVE_SEND
         primary_error = 188
       else
-        refs, operation, reply_cleanup, valid = mach_send_refs(task, destination)
+        refs, operation, reply_cleanup, valid = mach_send_refs(ops, task, destination)
         reply_cleanup_error = reply_cleanup if reply_cleanup_error == 0 && reply_cleanup != 0
         ownership = mach_move_send_ownership(result, true, valid && operation == 0, refs)
         if operation != 0 || !valid
@@ -319,10 +369,7 @@ module Behavior
         words[offset] = 0_u32
         offset &+= 1
       end
-      received = Darwin::Raw.call(-47, words.address,
-        MACH64_SEND_MQ_CALL | MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-        0_u64, 0_u64, 0_u64, destination.to_u64.unsafe_shl(32),
-        MACH_RECEIVE_BYTES, 1000_u64).primary.to_i32!
+      received = ops.receive_message(words, destination)
       if received != 0
         primary_error = 192
       elsif !mach_received_filler(words)
@@ -331,23 +378,22 @@ module Behavior
     end
 
     if extra_send_owned
-      released = mach_release_send(task, destination)
+      released = mach_release_send(ops, task, destination)
       extra_cleanup_error = released if released != 0
       extra_send_owned = false
     end
     if original_send_owned
-      released = mach_release_send(task, destination)
+      released = mach_release_send(ops, task, destination)
       send_cleanup_error = released if released != 0
       original_send_owned = false
     end
     if receive_owned
-      removed = Darwin::Raw.call(-19, task.to_u64, destination.to_u64,
-        MACH_PORT_RIGHT_RECEIVE, UInt64::MAX).primary.to_i32!
+      removed = ops.remove_receive(task, destination)
       receive_cleanup_error = removed if removed != 0
       receive_owned = false
     end
     if task_owned
-      released = mach_release_send(task, task)
+      released = mach_release_send(ops, task, task)
       task_cleanup_error = released if released != 0
       task_owned = false
     end
