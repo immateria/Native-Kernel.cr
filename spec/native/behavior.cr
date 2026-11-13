@@ -10,6 +10,7 @@ require "./behavior/spawn"
 require "./behavior/signal"
 require "./behavior/audit"
 require "./behavior/event"
+require "./behavior/mach_send_timeout"
 
 module Behavior
   def self.run(argc : Int32, argv : UInt8**) : Int32
@@ -42,6 +43,8 @@ module Behavior
                collection
              elsif equal(name, "inspection".to_unsafe)
                inspection
+             elsif equal(name, "mach-send-timeout".to_unsafe)
+               mach_send_timeout
              else
                return 3
              end

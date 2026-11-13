@@ -24,7 +24,7 @@ SCHEMA = 1
 OUTPUT_LIMIT = 65536
 CASE_TIMEOUT = 12
 BUILD_TIMEOUT = 300
-CASE_IDS = ("descriptor", "directory", "socket", "resource", "session", "exec", "signal", "audit", "event", "process", "collection", "inspection")
+CASE_IDS = ("descriptor", "directory", "socket", "resource", "session", "exec", "signal", "audit", "event", "process", "collection", "inspection", "mach-send-timeout")
 PROFILE_IDENTITIES = {
     "macos-15-arm64": (15, 24, "arm64"), "macos-15-x86_64": (15, 24, "x86_64"),
     "macos-26-arm64": (26, 25, "arm64"), "macos-26-x86_64": (26, 25, "x86_64"),
@@ -198,7 +198,7 @@ def load_config(root):
             raise QualificationError("Compiler matrix must be exactly 1.10.0 and 1.22.2")
         definitions = cases["cases"]
         if [c["id"] for c in definitions] != list(CASE_IDS):
-            raise QualificationError("Case roster must contain all twelve required cases in order")
+            raise QualificationError("Case roster must contain all thirteen required cases in order")
         for case in definitions:
             if not isinstance(case["minimum_darwin"], int) or not isinstance(case["exit_code"], int):
                 raise QualificationError("Invalid numeric case contract")
@@ -431,8 +431,9 @@ def validate_origin_proof(origin, profile, cases):
             raise QualificationError("Origin stage lacks successful bounded completion")
     for optimization in ("development", "release"):
         observed = [c for c in origin.get("cases", []) if c.get("optimization") == optimization]
-        if len(observed) != len(CASE_IDS) or {c.get("case") for c in observed} != set(CASE_IDS):
-            raise QualificationError("Origin case roster is incomplete")
+        observed_ids = [result.get("case") for result in observed]
+        if observed_ids != list(CASE_IDS):
+            raise QualificationError("Origin case roster is incomplete, duplicated, or reordered")
         for expected in cases:
             result = next(c for c in observed if c["case"] == expected["id"])
             if not result.get("completion_observed") or classify_case(dict(result, output_truncated=result.get("output_truncated", False)), expected, profile["darwin_major"])["status"] != "passed":

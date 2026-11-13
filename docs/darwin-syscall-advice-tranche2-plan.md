@@ -217,7 +217,268 @@ Use this mapping as the required tranche-2 disposition:
 | `darwin-lock-lifetime` | BSD 92 `fcntl` | `F_OFD_SETLK` versus `F_SETLK` ownership lifetime | Record command/lifetime evidence; leave lock policy to File-Lock/Filesystem consumers. |
 | `darwin-pty-controlling-terminal` | composed library/kernel path | `forkpty`, session, group, `/dev/tty`, foreground group and descriptor postconditions | Record consumer evidence only; no synthetic `forkpty` syscall row. |
 | `darwin-connectx-deferred` | BSD 447 `connectx` | `CONNECT_RESUME_ON_READ_WRITE` | Record loopback observation; no general network or early-data claim. |
-| `darwin-mach-send-timeout` | Mach message send through raw traps `-31`/`-47` | `MACH_SEND_TIMED_OUT`, `MOVE_SEND` pseudo-receive, returned header/right ownership | Add to the Mach ownership queue and qualify with a separate unmanaged Crystal case. |
+| `darwin-mach-send-timeout` | libSystem `mach_msg` transport; raw trap slots `-31`/`-47` are source-mapped but were not both runtime-exercised | `MACH_SEND_TIMED_OUT`, `MOVE_SEND` pseudo-receive, returned header/right ownership | Add to the Mach ownership queue and qualify with a separate unmanaged Crystal case. |
+
+## Delegable work packets
+
+These packets may be assigned independently to a faster implementation agent.
+They deliberately exclude Mach message construction, ownership-state design,
+failure-path cleanup, raw fixture execution and native-result interpretation.
+Packets A, C and D may run in parallel only when D uses an isolated worktree or
+is the sole writer in this checkout. Packets B and E edit documentation and must
+not run concurrently with another writer touching the same files.
+
+Every delegated agent must:
+
+1. read the workspace and Native-Kernel `AGENTS.md` files;
+2. record branch, HEAD and full initial status before acting;
+3. preserve all pre-existing modified, staged, untracked and ignored files;
+4. change only the packet's owned paths;
+5. keep caches, extracted archives, receipts and command logs outside the
+   repository;
+6. invoke standalone Python with `-B` or `PYTHONDONTWRITEBYTECODE=1`;
+7. stop on an identity mismatch, unexplained overlapping edit or instruction
+   ambiguity instead of widening scope;
+8. not run `scripts/ci/runner.py qualify`, `replay`, the new Mach fixture or any
+   ad hoc raw Mach experiment;
+9. not edit generated `docs/data/` outputs, public `src/` files, workflows,
+   Process-Control or another shard;
+10. not commit, push, fetch, install dependencies or delete files; and
+11. return changed paths, commands with exit status, external evidence paths,
+    exact failures/unrun checks and final status relative to the initial status.
+
+### Packet A: Authenticate artifacts and record the baseline
+
+**Purpose:** Execute Phase 0 without editing repository files.
+
+**Prerequisite:** Run this packet before any tranche-2 implementation edit. If
+the new Mach behavior fixture already exists in the checkout, stop and request a
+fresh baseline checkout rather than treating the changed tree as the baseline.
+
+**Owned outputs:** A fresh external directory only. Create it with:
+
+```sh
+NK_T2_PHASE0="$(mktemp -d /private/tmp/native-kernel-tranche2-phase0.XXXXXX)"
+print -r -- "$NK_T2_PHASE0"
+```
+
+Record the returned absolute path as `NK_T2_PHASE0`. Do not reuse a previous
+directory.
+
+**Required actions:**
+
+1. Recompute every top-level hash in [Inputs](#inputs). Write the complete
+   comparison, including expected and observed values, to
+   `NK_T2_PHASE0/hashes.txt`.
+2. Before extraction, inspect every ZIP entry. Reject duplicate names, absolute
+   paths, any `..` path component, backslash-separated paths and Unix symlinks.
+   Write the entry count and every rejection reason to
+   `NK_T2_PHASE0/zip-safety.json`. Do not execute bundle contents during this
+   check. Use Python's standard `zipfile` metadata and the Unix mode in
+   `ZipInfo.external_attr`; a filename-only listing is insufficient for the
+   symlink check.
+3. Extract the accepted ZIP into `NK_T2_PHASE0/skill`, recompute every in-ZIP
+   identity in [Inputs](#inputs), and append those comparisons to
+   `NK_T2_PHASE0/hashes.txt`.
+4. Run the packaged verifier against the original external
+   `macos-probes-final.json`:
+
+   ```sh
+   node "$NK_T2_PHASE0/skill/syscall-advice/scripts/verify-macos-probe-report.mjs" \
+     --report /Users/immateria/Downloads/syscall-advice-darwin-verification-tranche2-fixed/macos-probes-final.json \
+     --require-all-darwin \
+     --require-native-arm64
+   ```
+
+   Resolve the extracted top-level directory if the ZIP adds one enclosing
+   folder; do not guess a different verifier. Preserve stdout, stderr and exit
+   status separately.
+5. Independently inspect the four retained reports and write their ordered
+   `27/6 -> 5/1 -> 1/0 -> 33/0` counts, source digests and timestamps to
+   `NK_T2_PHASE0/report-sequence.json`.
+6. Run the existing Native-Kernel baseline only; the new Mach fixture must not
+   exist or execute in this packet:
+
+   ```sh
+   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+   CRYSTAL_CACHE_DIR="$NK_T2_PHASE0/crystal-cache" \
+     make check RECEIPTS="$NK_T2_PHASE0/core-receipts"
+   ```
+
+   Preserve both command logs and exit statuses.
+7. Confirm final repository status is byte-for-byte equivalent to initial
+   status. Ignored bytecode or build output is a packet failure.
+
+**Completion:** All identities match, ZIP safety passes, the verifier reports
+exactly 33 passes/zero skips/zero failures, the report sequence matches, and
+baseline commands reproduce. Otherwise return `Blocked: evidence identity` and
+make no repository edit.
+
+### Packet B: Append the tranche evidence documentation
+
+**Prerequisite:** Packet A completed with no mismatch.
+
+**Owned paths:**
+
+- `docs/darwin-syscall-advice-intake.md`;
+- `docs/darwin-syscall-landscape.md`.
+
+**Required edits:**
+
+1. Apply Phase 1 exactly. Preserve the predecessor evidence as its own dated
+   generation.
+2. Copy artifact hashes, host metadata and report counts only from Packet A's
+   retained evidence. Do not recompute or normalize them while editing.
+3. Add the eight rows in [Operation mapping](#operation-mapping) without
+   changing their primary operation or disposition wording.
+4. State the Skill and Native-Kernel XNU commit mismatch exactly as Phase 1
+   requires.
+5. Add only links and named secondary-queue entries to the landscape. Do not
+   change the 533 active rows, 44 typed entries, 489 gaps or any generated file.
+
+**Validation:**
+
+```sh
+git diff --check -- \
+  docs/darwin-syscall-advice-intake.md \
+  docs/darwin-syscall-landscape.md
+git diff --name-only
+git diff -- docs/data
+```
+
+The name-only output may contain pre-existing user paths plus the two owned
+paths, but no new packet-owned path. The `docs/data` diff must be empty. Return
+the two-file patch for review without committing it.
+
+**Stop conditions:** Stop without editing if Packet A is incomplete, the
+predecessor generation cannot be identified unambiguously, an owned file has an
+unexplained overlapping edit or a requested statement would exceed the recorded
+evidence.
+
+### Packet C: Collect exact XNU byte receipts
+
+**Purpose:** Perform the mechanical receipt portion of Phase 2. This packet does
+not interpret source semantics.
+
+**Owned outputs:** A fresh external directory only, created with:
+
+```sh
+NK_T2_XNU_RECEIPTS="$(mktemp -d /private/tmp/native-kernel-tranche2-xnu-receipts.XXXXXX)"
+print -r -- "$NK_T2_XNU_RECEIPTS"
+```
+
+Use this exact existing checkout unless its identity check fails:
+
+```sh
+XNU_ROOT=/tmp/native-kernel-github-reference.T4BcoZ/xnu-12377.121.6
+GIT_NO_LAZY_FETCH=1 git -C "$XNU_ROOT" remote get-url origin
+GIT_NO_LAZY_FETCH=1 git -C "$XNU_ROOT" rev-parse HEAD
+GIT_NO_LAZY_FETCH=1 git -C "$XNU_ROOT" rev-parse 'xnu-12377.121.6^{}'
+GIT_NO_LAZY_FETCH=1 git -C "$XNU_ROOT" status --short
+```
+
+**Required actions:**
+
+1. With lazy fetching disabled, record the checkout origin, HEAD, peeled
+   `xnu-12377.121.6` tag and status. Require HEAD and the peeled tag to equal
+   `ac9718fb1af618d5ce8678d0dc6e8a58f252216f`, the origin to equal the XNU URL
+   in [Inputs](#inputs), and status to be empty.
+2. Hash every file under [Phase 2's required exact-source
+   files](#required-exact-source-files), preserving its repository-relative
+   path. Write machine-readable JSON and a plain-text SHA-256 list.
+3. Confirm every path with `git -C "$XNU_ROOT" ls-files --error-unmatch -- PATH`
+   before hashing it. Record missing, unmaterialized or mismatched paths as
+   failures; do not fetch or substitute a neighboring release.
+4. Recheck HEAD and status after reading. They must match the initial receipt.
+
+**Completion:** Return only source identity and byte receipts. Do not derive
+constants, MIG layouts, call paths, ownership rules or API conclusions. Those
+remain expert work in Phase 2.
+
+### Packet D: Enforce ordered origin case rosters
+
+**Purpose:** Fix the independent runner-contract defect without adding the new
+Mach case.
+
+**Owned paths:**
+
+- `scripts/ci/runner.py`;
+- `tests/test_ci_runner.py`.
+
+**Exact change:** In `validate_origin_proof`, replace the set-only origin case
+check with an ordered comparison for each optimization mode:
+
+```python
+observed_ids = [result.get("case") for result in observed]
+if observed_ids != list(CASE_IDS):
+    raise QualificationError("Origin case roster is incomplete, duplicated, or reordered")
+```
+
+Remove the old length/set conditional rather than retaining a redundant branch;
+ordered equality rejects omissions, duplicates and extras. Leave the following
+unchanged in this packet:
+
+- `CASE_IDS`;
+- `ci/cases.json`;
+- behavior fixtures and case output contracts;
+- receipt schema and profile definitions.
+
+Extend `test_origin_proof_requires_full_stages_and_native_host`. Save a deep
+copy of its valid `origin["cases"]`, then separately prove rejection when the
+development slice is reversed, the release slice is reversed, one position is
+replaced with a duplicate case and one case is omitted. Restore the saved list
+between mutations and call `validate_origin_proof` once more at the end to prove
+the restored origin still passes.
+
+**Validation:**
+
+```sh
+python3 -B -m unittest \
+  tests.test_ci_runner.RunnerContractTests.test_origin_proof_requires_full_stages_and_native_host \
+  -v
+python3 -B -m unittest discover -s tests -v
+git diff --check -- scripts/ci/runner.py tests/test_ci_runner.py
+```
+
+If the focused dotted test name is changed while splitting the test, run every
+new ordered-roster test explicitly before the full discovery suite. Do not run
+native qualification. Return the two-file patch without committing it.
+
+### Packet E: Transcribe completed qualification evidence
+
+**Prerequisites:** Phases 3 and 4 completed outside this packet. Both compiler
+receipts must pass, both external supervisor records must show normal driver
+return and clean guest shutdown, and no deadline, forced teardown or ownership
+uncertainty may remain.
+
+**Owned paths:**
+
+- `docs/darwin-syscall-advice-intake.md`;
+- `docs/support.md` only for a passed existing profile;
+- `docs/ci-results.md` only when the supplied receipt came from a real hosted
+  run.
+
+**Required edits:**
+
+1. Transcribe exact receipt hashes, source hashes, host/build identity, compiler,
+   optimization modes, ordered case results and supervisor-evidence hashes.
+2. Label local disposable, hosted native, translated and unrun evidence
+   separately.
+3. Preserve every failed, incomplete, timed-out, forcibly torn down or missing
+   result. Such a result cannot enter `docs/support.md` as qualification.
+4. State that no public API or support floor changed.
+
+**Validation:** Run `git diff --check` on the owned files, prove `docs/data` and
+`src` have no packet diff, and compare final status with the recorded initial
+status. Return the documentation patch and exact receipt paths for expert review
+without committing it.
+
+**Stop conditions:** Stop without editing if a receipt is incomplete, its source
+identity differs from the implementation under review, a supervisor deadline or
+forced teardown occurred, or the evidence class cannot be determined exactly.
+
+Phase 2 semantic reconstruction, all of Phase 3, native/translated execution and
+interpretation of failures remain non-delegable under this plan.
 
 ## Phase 0: Reproduce artifact identity and baseline
 
@@ -384,8 +645,10 @@ The case must:
    `COPY_SEND` message whose exact-source path reaches successful copyin before
    timing out, and require `MACH_SEND_TIMED_OUT`;
 7. validate that the pseudo-received filler name equals the destination name and
-   require the send-right reference count to rise from one to two, tracking the
-   second reference separately from the original reference;
+   that its returned remote disposition is the received `PORT_SEND`/
+   `MOVE_SEND` type, then require the send-right reference count to rise from
+   one to two, tracking the second reference separately from the original
+   reference;
 8. release exactly that additional pseudo-received reference, require cleanup
    success and query the count back to one before continuing;
 9. submit a 28-byte non-complex message with `MOVE_SEND` and zero send timeout;
@@ -493,7 +756,8 @@ command, it must:
    `supervisor.jsonl`, `driver.stdout.log`, `driver.stderr.log`,
    `guest-console.log` and `provider-events.log`; record an unavailable stream
    explicitly rather than silently omitting it;
-2. set and record a 45-minute wall-clock deadline before launch;
+2. set and record a wall-clock deadline of no more than 45 minutes before
+   launch; a stricter provider or workflow deadline is acceptable;
 3. begin streaming driver stdout/stderr, guest console output and provider or VM
    lifecycle events to those paths before starting the guest command;
 4. on normal driver return, record its status and independently confirm that no
@@ -512,6 +776,20 @@ are themselves preserved evidence, not permission to rerun on a long-lived
 host. A hosted provider satisfies this rule only when its job timeout, log
 capture and ephemeral-runner destruction are enforced outside the job. Adding
 or changing a hosted workflow remains separately authorized work.
+
+For this implementation, use the repository's existing `Native macOS
+qualification` workflow for the first integrated execution. Its standard
+GitHub-hosted runners are ephemeral, its native jobs have a provider-enforced
+30-minute ceiling, its qualification step has a 20-minute ceiling, and its
+read-only workflow retains bounded receipts and logs for three days. Push the
+reviewed source commit, let the ordinary `push` trigger create the run, and do
+not execute the new artifact locally first. Download every native and forward
+receipt plus the complete GitHub job logs before classifying the result. A
+cancelled, timed-out or runner-lost job is failed or incomplete evidence even
+when another matrix cell passes. The GitHub run URL, run attempt, commit, job
+IDs and downloaded artifact hashes form the external supervisor record; no file
+written inside the runner may substitute for the provider's timeout and
+teardown.
 
 Preserve any hung or unkillable state as runtime evidence and destroy the
 disposable environment rather than continuing on the host. Do not execute the
@@ -537,8 +815,8 @@ fresh, external paths for every cache, receipt and qualification output.
 
 First run the expanded behavior qualification on the disposable native arm64
 host required by Phase 3, once per compiler. The following commands are guest
-payloads; invoke each through the independent 45-minute host supervisor rather
-than as an unsupervised interactive command:
+payloads; invoke each through the independent host supervisor with a deadline
+of no more than 45 minutes rather than as an unsupervised interactive command:
 
 ```sh
 CRYSTAL_CACHE_DIR="$NK_CURRENT_QUALIFY_CACHE" \

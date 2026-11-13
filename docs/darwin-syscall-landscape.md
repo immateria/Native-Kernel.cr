@@ -19,6 +19,7 @@ percent of the active logical surface.
 - [Exact XNU source manifest](data/darwin-xnu-source-manifest-xnu-12377.121.6.json)
 - [Upstream data provenance and license](data/README.md)
 - [GitHub catalog source register](darwin-catalog-sources.md)
+- [Syscall Advice evidence generations and dispositions](darwin-syscall-advice-intake.md)
 
 The CSVs retain XNU's logical name, handler, prototype, condition, audit class,
 architecture, source path and source line. They add Native-Kernel's present
@@ -177,6 +178,35 @@ The primary CSVs answer “what entries did the reviewed XNU dispatch-table
 parser find?” This table answers “which named operation spaces have already
 been recognized as decision units?” Neither proves that every operation space
 has been found or promises to expose every upstream constant.
+
+## Tranche-2 secondary-operation queue
+
+The [tranche-2 evidence intake](darwin-syscall-advice-intake.md#evidence-generation-2--tranche-2)
+adds bounded runtime observations to the following named-operation queues. It
+does not change the 533 active primary rows, 44 typed primary entries or 489
+gap rows, and it does not turn a successful C probe into a public support
+guarantee.
+
+- BSD 488 `renameatx_np`: `RENAME_SWAP`, `RENAME_EXCL` and their invalid
+  combination;
+- BSD 363 `kevent`: `EVFILT_VNODE` opened-object identity across replacement,
+  with only source-corroborated relevance to BSD 369 `kevent64`;
+- BSD 75 `madvise`: `MADV_FREE` mapping validity and discardable contents;
+- BSD 92 `fcntl` and BSD 95 `fsync`: `F_BARRIERFSYNC` and `F_FULLFSYNC`
+  availability/results, without a durability claim;
+- BSD 92 `fcntl`: `F_OFD_SETLK` versus `F_SETLK` ownership lifetime;
+- the composed `forkpty` path: session, process group, controlling terminal,
+  foreground group and descriptor postconditions, without a synthetic syscall
+  row;
+- BSD 447 `connectx`: `CONNECT_RESUME_ON_READ_WRITE` on bounded loopback; and
+- Mach message transport observed through libSystem `mach_msg`:
+  `MACH_SEND_TIMED_OUT`, `MOVE_SEND` pseudo-receive and returned-header/right
+  ownership. Raw trap slots `-31`/`-47` are source-mapped but were not both
+  runtime-exercised by that probe.
+
+These remain review queues. Exact-source reconstruction, Crystal artifact
+auditing and source-bound native execution are separate gates before a row can
+change Native-Kernel's typed or behavior-qualified surface.
 
 ## Gates for a stronger completeness claim
 

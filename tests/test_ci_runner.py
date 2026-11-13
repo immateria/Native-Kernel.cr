@@ -1,4 +1,5 @@
 """Contract tests for the managed native qualifier; no Darwin compiler required."""
+import copy
 import importlib.util
 import json
 import os
@@ -362,6 +363,7 @@ class RunnerContractTests(unittest.TestCase):
                              "status": "passed", "completion_observed": True,
                              "exit_code": case["exit_code"], "stdout": case["stdout"], "stderr": case["stderr"]}
                             for optimization in ("development", "release") for case in cases]}
+        saved_cases = copy.deepcopy(origin["cases"])
         runner.validate_origin_proof(origin, self.profile, cases)
         saved = origin["stages"]
         origin["stages"] = [{"name": "identity-compiler", "status": "passed", "exit_code": 0}]
@@ -375,6 +377,29 @@ class RunnerContractTests(unittest.TestCase):
         origin["source_after"] = {"a": "changed"}
         with self.assertRaises(runner.QualificationError):
             runner.validate_origin_proof(origin, self.profile, cases)
+        origin["source_after"] = {"a": "b"}
+
+        case_count = len(cases)
+        origin["cases"] = list(reversed(saved_cases[:case_count])) + saved_cases[case_count:]
+        with self.assertRaises(runner.QualificationError):
+            runner.validate_origin_proof(origin, self.profile, cases)
+        origin["cases"] = copy.deepcopy(saved_cases)
+
+        origin["cases"] = saved_cases[:case_count] + list(reversed(saved_cases[case_count:]))
+        with self.assertRaises(runner.QualificationError):
+            runner.validate_origin_proof(origin, self.profile, cases)
+        origin["cases"] = copy.deepcopy(saved_cases)
+
+        origin["cases"][1] = copy.deepcopy(origin["cases"][0])
+        with self.assertRaises(runner.QualificationError):
+            runner.validate_origin_proof(origin, self.profile, cases)
+        origin["cases"] = copy.deepcopy(saved_cases)
+
+        origin["cases"].pop()
+        with self.assertRaises(runner.QualificationError):
+            runner.validate_origin_proof(origin, self.profile, cases)
+        origin["cases"] = copy.deepcopy(saved_cases)
+        runner.validate_origin_proof(origin, self.profile, cases)
 
     def test_unknown_profile_still_emits_a_failure_receipt(self):
         output = self.directory / "unknown"

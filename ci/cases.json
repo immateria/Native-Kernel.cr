@@ -84,6 +84,13 @@
       "exit_code": 0,
       "stdout": "NK_OK inspection\n",
       "stderr": ""
+    },
+    {
+      "id": "mach-send-timeout",
+      "minimum_darwin": 24,
+      "exit_code": 0,
+      "stdout": "NK_OK mach-send-timeout\n",
+      "stderr": ""
     }
   ]
 }

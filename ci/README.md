@@ -111,8 +111,8 @@ run each bundle with `monterey_foundations_runner.py` on the exact Mini. The
 exact commands, source limitation and receipt gates. Neither a bundle build nor
 a preflight execution qualifies Process-Control.
 
-The collection/inspection batch adds two source-bound behavior cases, bringing
-the required roster to twelve. `collection` exercises wait4, waitid and
+The collection/inspection batch added two source-bound behavior cases, bringing
+that qualified roster to twelve. `collection` exercises wait4, waitid and
 getrusage with exclusive owned-child collection, observation and copyout-fault
 checks. `inspection` exercises typed BSD/task records, both extended-ID
 comparisons, usage versions 0/1/2 and parent/group list filters. These cases
@@ -121,6 +121,14 @@ names to positive cases; overloads and record versions are exercised within
 their named case. The [ABI notes](../docs/darwin-accounting.md) describe native
 units, output-validity and attribution limits. The earlier ten-case hosted
 run does not qualify these additions.
+
+The source now adds `mach-send-timeout` as a thirteenth case for Darwin 24 and
+later. It reconstructs a bounded `mach_port_get_refs` exchange, proves
+`COPY_SEND` pseudo-receive accounting, and checks `MOVE_SEND` restoration after
+a full-queue timeout. This case is not locally executed on a long-lived host.
+Its first source-bound runtime result must come from the externally timed,
+ephemeral GitHub-hosted jobs; the older twelve-case receipts remain historical
+evidence for their exact source only.
 
 The collection fixture also retains a successful write result across a close
 trap before checking it. Its optimized x86-64 build exposed the former `cc`
